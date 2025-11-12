@@ -1,0 +1,26 @@
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+import { projectId, publicAnonKey } from './supabase/info';
+
+let supabaseClient: ReturnType<typeof createSupabaseClient> | null = null;
+
+export function createClient() {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
+
+  supabaseClient = createSupabaseClient(
+    `https://${projectId}.supabase.co`,
+    publicAnonKey,
+    {
+      realtime: {
+        params: {
+          eventsPerSecond: 10
+        }
+      }
+    }
+  );
+
+  return supabaseClient;
+}
+
+export const supabase = createClient();
