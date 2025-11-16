@@ -171,26 +171,6 @@ app.get("/make-server-90ad488b/me", async (c) => {
 
 // ==================== USER MANAGEMENT (ADMIN) ====================
 
-app.get("/make-server-90ad488b/users", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'admin') {
-      return c.json({ error: 'Admin access required' }, 403);
-    }
-    
-    const users = await kv.getByPrefix('user:');
-    return c.json({ users });
-  } catch (error) {
-    console.log('Get users error:', error);
-    return c.json({ error: 'Internal server error while fetching users' }, 500);
-  }
-});
-
 app.delete("/make-server-90ad488b/users/:userId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
@@ -1076,9 +1056,552 @@ app.get("/make-server-90ad488b/reports/overview", async (c) => {
   }
 });
 
+// ==================== ATTENDANCE ENDPOINTS ====================
+
+// Get today's attendance (for all users - filtered by role)
+app.get("/make-server-90ad488b/attendance/today", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const today = new Date().toISOString().split('T')[0];
+    const allAttendance = await kv.getByPrefix('attendance_record:');
+    
+    // Filter today's attendance
+    const todayAttendance = allAttendance.filter(a => {
+      const attendanceDate = new Date(a.date).toISOString().split('T')[0];
+      return attendanceDate === today;
+    });
+    
+    // Filter by role
+    let filteredAttendance = todayAttendance;
+    
+    if (user.role === 'instructor') {
+      // Get instructor's courses
+      const courses = await kv.getByPrefix('course:');
+      const instructorCourses = courses.filter(c => c.instructor_id === user.id);
+      const courseIds = instructorCourses.map(c => c.id);
+      
+      // Filter attendance for instructor's courses only
+      filteredAttendance = todayAttendance.filter(a => courseIds.includes(a.course_id));
+    } else if (user.role === 'student') {
+      // Student can only see their own attendance
+      filteredAttendance = todayAttendance.filter(a => a.student_id === user.id);
+    }
+    // Admin can see all
+    
+    return c.json({ attendance: filteredAttendance });
+  } catch (error) {
+    console.log('Get today attendance error:', error);
+    return c.json({ error: 'Internal server error while fetching today attendance' }, 500);
+  }
+});
+
+// Get my attendance (for students)
+app.get("/make-server-90ad488b/attendance/my", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const allAttendance = await kv.getByPrefix('attendance_record:');
+    const myAttendance = allAttendance.filter(a => a.student_id === user.id);
+    
+    // Get course details
+    const attendanceWithCourses = await Promise.all(
+      myAttendance.map(async (att) => {
+        const course = await kv.get(`course:${att.course_id}`);
+        return {
+          ...att,
+          course_name: course?.course_name,
+          course_code: course?.course_code
+        };
+      })
+    );
+    
+    return c.json({ attendance: attendanceWithCourses });
+  } catch (error) {
+    console.log('Get my attendance error:', error);
+    return c.json({ error: 'Internal server error while fetching attendance' }, 500);
+  }
+});
+
+// Get all users (with role-based filtering)
+app.get("/make-server-90ad488b/users", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const users = await kv.getByPrefix('user:');
+    
+    // Role-based filtering
+    if (user.role === 'admin') {
+      // Admin can see all users
+      return c.json({ users });
+    } else if (user.role === 'instructor') {
+      // Instructor can see students in their courses
+      const courses = await kv.getByPrefix('course:');
+      const instructorCourses = courses.filter(c => c.instructor_id === user.id);
+      const courseIds = instructorCourses.map(c => c.id);
+      
+      // Get enrollments for instructor's courses
+      const enrollments = await kv.getByPrefix('enrollment:');
+      const relevantEnrollments = enrollments.filter(e => courseIds.includes(e.course_id));
+      const studentIds = relevantEnrollments.map(e => e.student_id);
+      
+      // Return students + self
+      const accessibleUsers = users.filter(u => 
+        u.id === user.id || 
+        (u.role === 'student' && studentIds.includes(u.id))
+      );
+      
+      return c.json({ users: accessibleUsers });
+    } else {
+      // Students and supervisors can only see themselves
+      const selfUser = users.find(u => u.id === user.id);
+      return c.json({ users: selfUser ? [selfUser] : [] });
+    }
+  } catch (error) {
+    console.log('Get users error:', error);
+    return c.json({ error: 'Internal server error while fetching users' }, 500);
+  }
+});
+
 // Health check endpoint
 app.get("/make-server-90ad488b/health", (c) => {
   return c.json({ status: "ok" });
+});
+
+// ==================== LIVE SESSIONS ENDPOINTS ====================
+
+// Helper functions for live sessions
+function generateLiveSessionId(): string {
+  return `live_session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+}
+
+function generateAttendanceCode(): string {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// Create new live session
+app.post("/make-server-90ad488b/live-sessions", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const { course_id, title, type, scheduled_time } = await c.req.json();
+
+    if (!course_id || !title || !type) {
+      return c.json({ error: 'Missing required fields' }, 400);
+    }
+
+    if (!['audio', 'video'].includes(type)) {
+      return c.json({ error: 'Invalid session type' }, 400);
+    }
+
+    // Get course details
+    const course = await kv.get(`course:${course_id}`);
+    if (!course) {
+      return c.json({ error: 'Course not found' }, 404);
+    }
+
+    // Check if user is the instructor
+    if (user.role !== 'instructor' && user.role !== 'admin') {
+      return c.json({ error: 'Only instructors can create live sessions' }, 403);
+    }
+
+    if (user.role === 'instructor' && course.instructor_id !== user.id) {
+      return c.json({ error: 'You can only create sessions for your courses' }, 403);
+    }
+
+    const sessionId = generateLiveSessionId();
+    const now = new Date().toISOString();
+
+    const session = {
+      id: sessionId,
+      course_id,
+      course_name: course.course_name,
+      course_code: course.course_code,
+      instructor_id: user.id,
+      instructor_name: user.full_name,
+      title,
+      type,
+      status: scheduled_time ? 'scheduled' : 'waiting',
+      scheduled_time: scheduled_time || null,
+      start_time: null,
+      end_time: null,
+      meeting_url: null,
+      attendance_code: null,
+      participants: [],
+      created_at: now,
+      updated_at: now,
+    };
+
+    await kv.set(`live_session:${sessionId}`, session);
+
+    // Add to course sessions list
+    const courseSessions = await kv.get(`course:${course_id}:live_sessions`) || [];
+    courseSessions.push(sessionId);
+    await kv.set(`course:${course_id}:live_sessions`, courseSessions);
+
+    // Add to instructor sessions list
+    const instructorSessions = await kv.get(`instructor:${user.id}:live_sessions`) || [];
+    instructorSessions.push(sessionId);
+    await kv.set(`instructor:${user.id}:live_sessions`, instructorSessions);
+
+    return c.json({ 
+      message: 'Live session created successfully',
+      session 
+    });
+  } catch (err: any) {
+    console.error('Error creating live session:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Start a live session
+app.post("/make-server-90ad488b/live-sessions/:sessionId/start", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const sessionId = c.req.param('sessionId');
+    const session = await kv.get(`live_session:${sessionId}`);
+
+    if (!session) {
+      return c.json({ error: 'Session not found' }, 404);
+    }
+
+    if (session.instructor_id !== user.id && user.role !== 'admin') {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    if (session.status === 'finished') {
+      return c.json({ error: 'Session already finished' }, 400);
+    }
+
+    // Generate Jitsi meeting URL
+    const meetingRoomName = `kku_${sessionId}`;
+    const meetingUrl = `https://meet.jit.si/${meetingRoomName}`;
+    const attendanceCode = generateAttendanceCode();
+
+    session.status = 'ongoing';
+    session.start_time = new Date().toISOString();
+    session.meeting_url = meetingUrl;
+    session.attendance_code = attendanceCode;
+    session.updated_at = new Date().toISOString();
+
+    await kv.set(`live_session:${sessionId}`, session);
+
+    // Create notifications for all enrolled students
+    const course = await kv.get(`course:${session.course_id}`);
+    if (course) {
+      const enrollments = await kv.getByPrefix(`enrollment:`);
+      const courseEnrollments = enrollments.filter(e => e.course_id === session.course_id);
+
+      for (const enrollment of courseEnrollments) {
+        const studentId = enrollment.student_id;
+        const notificationId = `notification_${Date.now()}_${studentId}`;
+        const notification = {
+          id: notificationId,
+          user_id: studentId,
+          type: 'live_session_started',
+          title: 'جلسة مباشرة الآن',
+          message: `بدأت جلسة مباشرة للمقرر ${session.course_name}`,
+          data: {
+            session_id: sessionId,
+            course_id: session.course_id,
+            course_name: session.course_name,
+            meeting_url: meetingUrl,
+          },
+          read: false,
+          created_at: new Date().toISOString(),
+        };
+
+        await kv.set(`notification:${notificationId}`, notification);
+
+        const userNotifications = await kv.get(`user:${studentId}:notifications`) || [];
+        userNotifications.unshift(notificationId);
+        await kv.set(`user:${studentId}:notifications`, userNotifications.slice(0, 50));
+      }
+    }
+
+    return c.json({ message: 'Live session started successfully', session });
+  } catch (err: any) {
+    console.error('Error starting live session:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// End a live session
+app.post("/make-server-90ad488b/live-sessions/:sessionId/end", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const sessionId = c.req.param('sessionId');
+    const session = await kv.get(`live_session:${sessionId}`);
+
+    if (!session) {
+      return c.json({ error: 'Session not found' }, 404);
+    }
+
+    if (session.instructor_id !== user.id && user.role !== 'admin') {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    session.status = 'finished';
+    session.end_time = new Date().toISOString();
+    session.updated_at = new Date().toISOString();
+
+    await kv.set(`live_session:${sessionId}`, session);
+
+    return c.json({ message: 'Live session ended successfully', session });
+  } catch (err: any) {
+    console.error('Error ending live session:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Join a live session (student)
+app.post("/make-server-90ad488b/live-sessions/:sessionId/join", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const sessionId = c.req.param('sessionId');
+    const session = await kv.get(`live_session:${sessionId}`);
+
+    if (!session) {
+      return c.json({ error: 'Session not found' }, 404);
+    }
+
+    if (session.status !== 'ongoing') {
+      return c.json({ error: 'Session is not active' }, 400);
+    }
+
+    // Check if student is enrolled in the course
+    const enrollment = await kv.get(`enrollment:${user.id}:${session.course_id}`);
+    if (!enrollment && user.role !== 'admin') {
+      return c.json({ error: 'You are not enrolled in this course' }, 403);
+    }
+
+    // Add student to participants if not already
+    if (!session.participants.includes(user.id)) {
+      session.participants.push(user.id);
+      session.updated_at = new Date().toISOString();
+      await kv.set(`live_session:${sessionId}`, session);
+
+      // Auto-mark attendance
+      const attendanceId = `attendance_${Date.now()}_${user.id}`;
+      const attendance = {
+        id: attendanceId,
+        session_id: sessionId,
+        student_id: user.id,
+        student_name: user.full_name,
+        course_id: session.course_id,
+        status: 'present',
+        session_type: 'live',
+        date: new Date().toISOString(),
+        marked_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      };
+
+      await kv.set(`attendance_record:${attendanceId}`, attendance);
+
+      // Add to student attendance list
+      const studentAttendance = await kv.get(`student:${user.id}:attendance`) || [];
+      studentAttendance.push(attendanceId);
+      await kv.set(`student:${user.id}:attendance`, studentAttendance);
+    }
+
+    return c.json({ 
+      message: 'Joined session successfully',
+      session: {
+        id: session.id,
+        title: session.title,
+        type: session.type,
+        meeting_url: session.meeting_url,
+        course_name: session.course_name,
+        instructor_name: session.instructor_name,
+      }
+    });
+  } catch (err: any) {
+    console.error('Error joining live session:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Get instructor's live sessions
+app.get("/make-server-90ad488b/live-sessions/instructor", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const sessionIds = await kv.get(`instructor:${user.id}:live_sessions`) || [];
+    const sessions = [];
+
+    for (const sessionId of sessionIds) {
+      const session = await kv.get(`live_session:${sessionId}`);
+      if (session) {
+        sessions.push(session);
+      }
+    }
+
+    sessions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    return c.json({ sessions });
+  } catch (err: any) {
+    console.error('Error fetching instructor sessions:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Get active live sessions for student
+app.get("/make-server-90ad488b/live-sessions/active", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const allCourses = await kv.getByPrefix('course:');
+    const enrollments = await kv.getByPrefix(`enrollment:${user.id}:`);
+    const enrolledCourseIds = enrollments.map(e => e.course_id);
+    const enrolledCourses = allCourses.filter(course => enrolledCourseIds.includes(course.id));
+
+    const activeSessions = [];
+
+    for (const course of enrolledCourses) {
+      const sessionIds = await kv.get(`course:${course.id}:live_sessions`) || [];
+      
+      for (const sessionId of sessionIds) {
+        const session = await kv.get(`live_session:${sessionId}`);
+        if (session && (session.status === 'ongoing' || session.status === 'scheduled')) {
+          activeSessions.push(session);
+        }
+      }
+    }
+
+    activeSessions.sort((a, b) => {
+      if (a.status === 'ongoing' && b.status !== 'ongoing') return -1;
+      if (a.status !== 'ongoing' && b.status === 'ongoing') return 1;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+
+    return c.json({ sessions: activeSessions });
+  } catch (err: any) {
+    console.error('Error fetching student active sessions:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Get session details
+app.get("/make-server-90ad488b/live-sessions/:sessionId", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const sessionId = c.req.param('sessionId');
+    const session = await kv.get(`live_session:${sessionId}`);
+
+    if (!session) {
+      return c.json({ error: 'Session not found' }, 404);
+    }
+
+    // Check access
+    if (user.role === 'instructor') {
+      if (session.instructor_id !== user.id) {
+        return c.json({ error: 'Unauthorized' }, 403);
+      }
+    } else if (user.role === 'student') {
+      const enrollment = await kv.get(`enrollment:${user.id}:${session.course_id}`);
+      if (!enrollment) {
+        return c.json({ error: 'You are not enrolled in this course' }, 403);
+      }
+    } else if (user.role !== 'admin') {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    return c.json({ session });
+  } catch (err: any) {
+    console.error('Error fetching session details:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Get user notifications
+app.get("/make-server-90ad488b/notifications", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const notificationIds = await kv.get(`user:${user.id}:notifications`) || [];
+    const notifications = [];
+
+    for (const notificationId of notificationIds.slice(0, 20)) {
+      const notification = await kv.get(`notification:${notificationId}`);
+      if (notification) {
+        notifications.push(notification);
+      }
+    }
+
+    return c.json({ notifications });
+  } catch (err: any) {
+    console.error('Error fetching notifications:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Mark notification as read
+app.post("/make-server-90ad488b/notifications/:notificationId/read", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+
+    const notificationId = c.req.param('notificationId');
+    const notification = await kv.get(`notification:${notificationId}`);
+
+    if (!notification) {
+      return c.json({ error: 'Notification not found' }, 404);
+    }
+
+    if (notification.user_id !== user.id) {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    notification.read = true;
+    await kv.set(`notification:${notificationId}`, notification);
+
+    return c.json({ message: 'Notification marked as read' });
+  } catch (err: any) {
+    console.error('Error marking notification as read:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
 });
 
 Deno.serve(app.fetch);

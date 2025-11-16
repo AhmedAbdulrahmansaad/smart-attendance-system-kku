@@ -1,25 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './utils/queryClient';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { LanguageProvider, useLanguage } from './components/LanguageContext';
 import { ThemeProvider } from './components/ThemeContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { LandingPage } from './components/LandingPage';
 import { LoginPage } from './components/LoginPage';
 import { DashboardLayout } from './components/DashboardLayout';
-import { AdminDashboard } from './components/AdminDashboard';
-import { InstructorDashboard } from './components/InstructorDashboard';
-import { StudentDashboard } from './components/StudentDashboard';
-import { UserManagement } from './components/UserManagement';
-import { CourseManagement } from './components/CourseManagement';
-import { ScheduleManagement } from './components/ScheduleManagement';
-import { SessionManagement } from './components/SessionManagement';
-import { StudentAttendance } from './components/StudentAttendance';
-import { MyAttendanceRecords } from './components/MyAttendanceRecords';
-import { ReportsPage } from './components/ReportsPage';
-import { TeamPage } from './components/TeamPage';
-import { BackendHealthCheck } from './components/BackendHealthCheck';
-import { SupabaseSetupGuide } from './components/SupabaseSetupGuide';
 import { Button } from './components/ui/button';
 import { isSupabaseConfigured } from './utils/supabaseClient';
+import { LoadingFallback } from './components/LoadingFallback';
+
+// Lazy load heavy components for better performance
+const AdminDashboard = lazy(() => import('./components/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
+const InstructorDashboard = lazy(() => import('./components/InstructorDashboard').then(m => ({ default: m.InstructorDashboard })));
+const StudentDashboard = lazy(() => import('./components/StudentDashboard').then(m => ({ default: m.StudentDashboard })));
+const UserManagement = lazy(() => import('./components/UserManagement').then(m => ({ default: m.UserManagement })));
+const CourseManagement = lazy(() => import('./components/CourseManagement').then(m => ({ default: m.CourseManagement })));
+const ScheduleManagement = lazy(() => import('./components/ScheduleManagement').then(m => ({ default: m.ScheduleManagement })));
+const SessionManagement = lazy(() => import('./components/SessionManagement').then(m => ({ default: m.SessionManagement })));
+const StudentAttendance = lazy(() => import('./components/StudentAttendance').then(m => ({ default: m.StudentAttendance })));
+const MyAttendanceRecords = lazy(() => import('./components/MyAttendanceRecords').then(m => ({ default: m.MyAttendanceRecords })));
+const ReportsPage = lazy(() => import('./components/ReportsPage').then(m => ({ default: m.ReportsPage })));
+const TeamPage = lazy(() => import('./components/TeamPage').then(m => ({ default: m.TeamPage })));
+const BackendHealthCheck = lazy(() => import('./components/BackendHealthCheck').then(m => ({ default: m.BackendHealthCheck })));
+const SupabaseSetupGuide = lazy(() => import('./components/SupabaseSetupGuide').then(m => ({ default: m.SupabaseSetupGuide })));
 
 type Page = 'landing' | 'login' | 'team' | 'dashboard' | string;
 
@@ -30,18 +36,17 @@ function AppContent() {
 
   // Check if Supabase is configured
   if (!isSupabaseConfigured()) {
-    return <SupabaseSetupGuide />;
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={<LoadingFallback />}>
+          <SupabaseSetupGuide />
+        </Suspense>
+      </ErrorBoundary>
+    );
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">جارٍ التحميل...</p>
-        </div>
-      </div>
-    );
+    return <LoadingFallback />;
   }
 
   // If user is logged in, show dashboard
@@ -49,24 +54,66 @@ function AppContent() {
     const renderPage = () => {
       // Team page for all roles
       if (currentPage === 'team') {
-        return <TeamPage onBack={() => setCurrentPage('dashboard')} />;
+        return (
+          <ErrorBoundary>
+            <Suspense fallback={<LoadingFallback />}>
+              <TeamPage onBack={() => setCurrentPage('dashboard')} />
+            </Suspense>
+          </ErrorBoundary>
+        );
       }
 
       // Admin pages
       if (user.role === 'admin') {
         switch (currentPage) {
           case 'dashboard':
-            return <AdminDashboard />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <AdminDashboard />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'users':
-            return <UserManagement />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <UserManagement />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'courses':
-            return <CourseManagement />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <CourseManagement />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'schedules':
-            return <ScheduleManagement />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ScheduleManagement />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'reports':
-            return <ReportsPage />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ReportsPage />
+                </Suspense>
+              </ErrorBoundary>
+            );
           default:
-            return <AdminDashboard />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <AdminDashboard />
+                </Suspense>
+              </ErrorBoundary>
+            );
         }
       }
 
@@ -74,17 +121,53 @@ function AppContent() {
       if (user.role === 'instructor') {
         switch (currentPage) {
           case 'dashboard':
-            return <InstructorDashboard />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <InstructorDashboard />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'courses':
-            return <CourseManagement />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <CourseManagement />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'sessions':
-            return <SessionManagement onNavigate={setCurrentPage} />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <SessionManagement onNavigate={setCurrentPage} />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'schedules':
-            return <ScheduleManagement />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ScheduleManagement />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'reports':
-            return <ReportsPage />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ReportsPage />
+                </Suspense>
+              </ErrorBoundary>
+            );
           default:
-            return <InstructorDashboard />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <InstructorDashboard />
+                </Suspense>
+              </ErrorBoundary>
+            );
         }
       }
 
@@ -92,15 +175,45 @@ function AppContent() {
       if (user.role === 'student') {
         switch (currentPage) {
           case 'dashboard':
-            return <StudentDashboard />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <StudentDashboard />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'attendance':
-            return <StudentAttendance />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <StudentAttendance />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'schedule':
-            return <ScheduleManagement />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ScheduleManagement />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'my-attendance':
-            return <MyAttendanceRecords />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <MyAttendanceRecords />
+                </Suspense>
+              </ErrorBoundary>
+            );
           default:
-            return <StudentDashboard />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <StudentDashboard />
+                </Suspense>
+              </ErrorBoundary>
+            );
         }
       }
 
@@ -108,11 +221,29 @@ function AppContent() {
       if (user.role === 'supervisor') {
         switch (currentPage) {
           case 'dashboard':
-            return <ReportsPage />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ReportsPage />
+                </Suspense>
+              </ErrorBoundary>
+            );
           case 'reports':
-            return <ReportsPage />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ReportsPage />
+                </Suspense>
+              </ErrorBoundary>
+            );
           default:
-            return <ReportsPage />;
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ReportsPage />
+                </Suspense>
+              </ErrorBoundary>
+            );
         }
       }
 
@@ -132,7 +263,13 @@ function AppContent() {
   }
 
   if (currentPage === 'team') {
-    return <TeamPage onBack={() => setCurrentPage('landing')} />;
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={<LoadingFallback />}>
+          <TeamPage onBack={() => setCurrentPage('landing')} />
+        </Suspense>
+      </ErrorBoundary>
+    );
   }
 
   if (currentPage === 'health-check') {
@@ -148,7 +285,11 @@ function AppContent() {
               ← {language === 'ar' ? 'العودة للرئيسية' : 'Back to Home'}
             </Button>
           </div>
-          <BackendHealthCheck />
+          <ErrorBoundary>
+            <Suspense fallback={<LoadingFallback />}>
+              <BackendHealthCheck />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </div>
     );
@@ -163,12 +304,16 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <LanguageProvider>
-        <AuthProvider>
-          <AppContent />
-        </AuthProvider>
-      </LanguageProvider>
-    </ThemeProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <LanguageProvider>
+            <AuthProvider>
+              <AppContent />
+            </AuthProvider>
+          </LanguageProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

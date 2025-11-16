@@ -42,23 +42,45 @@ if (!isConfigured) {
   console.error('');
 }
 
-// إنشاء الـ client (حتى لو لم يكن مكوّن، لتجنب أخطاء الـ imports)
-export const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-key',
-  {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: true
-    },
-    realtime: {
-      params: {
-        eventsPerSecond: 10
+// Singleton instance - create once only
+let supabaseInstance: ReturnType<typeof createClient> | null = null;
+
+function createSupabaseClient() {
+  if (supabaseInstance) {
+    return supabaseInstance;
+  }
+
+  supabaseInstance = createClient(
+    supabaseUrl || 'https://placeholder.supabase.co',
+    supabaseAnonKey || 'placeholder-key',
+    {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+        flowType: 'pkce',
+      },
+      realtime: {
+        params: {
+          eventsPerSecond: 10
+        }
+      },
+      global: {
+        headers: {
+          'x-client-info': 'kku-attendance-system'
+        }
+      },
+      db: {
+        schema: 'public'
       }
     }
-  }
-);
+  );
+
+  return supabaseInstance;
+}
+
+// Export singleton instance
+export const supabase = createSupabaseClient();
 
 // دالة جاهزة للاستخدام في باقي الملفات
 export function getSupabaseClient() {
@@ -70,7 +92,7 @@ export function isSupabaseConfigured() {
   return isConfigured;
 }
 
-// دالة للتحقق من الاتصال
+// دالة محسّنة للتحقق من الاتصال مع timeout
 export async function checkConnection() {
   if (!isConfigured) {
     console.warn('⚠️ Supabase not configured. Please check /config/supabase.config.ts');
@@ -78,12 +100,27 @@ export async function checkConnection() {
   }
   
   try {
-    const { data, error } = await supabase.from('kv_store_90ad488b').select('key').limit(1);
-    if (error) throw error;
+    // Add timeout to connection check
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Connection timeout')), 5000)
+    );
+    
+    const checkPromise = supabase
+      .from('kv_store_90ad488b')
+      .select('key', { count: 'exact', head: true })
+      .limit(1);
+    
+    const { error } = await Promise.race([checkPromise, timeoutPromise]);
+    
+    if (error) {
+      console.error('❌ Supabase connection failed:', error.message);
+      return false;
+    }
+    
     console.log('✅ Supabase connection successful');
     return true;
-  } catch (error) {
-    console.error('❌ Supabase connection failed:', error);
+  } catch (error: any) {
+    console.error('❌ Supabase connection error:', error.message);
     return false;
   }
 }

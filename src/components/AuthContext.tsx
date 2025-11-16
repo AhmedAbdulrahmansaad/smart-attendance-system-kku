@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../utils/supabaseClient';
 import { apiRequest } from '../utils/api';
 
@@ -28,10 +28,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null);
+  const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isRefreshingRef = useRef(false);
 
-  const refreshUser = async () => {
+  // Memoized refreshUser to prevent re-creation
+  const refreshUser = useCallback(async () => {
+    // Prevent concurrent refreshes
+    if (isRefreshingRef.current) {
+      console.log('⏸️ [AuthContext] Refresh already in progress, skipping');
+      return;
+    }
+    
+    isRefreshingRef.current = true;
     console.log('🔄 [AuthContext] refreshUser called');
+    
     try {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
@@ -76,8 +86,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
           
           console.log('✅ [AuthContext] User data received:', userData.user);
-          setUser(userData.user);
-          setToken(session.access_token);
+          
+          // Only update if data actually changed (prevents unnecessary re-renders)
+          setUser(prev => {
+            const newUser = userData.user;
+            if (!prev || prev.id !== newUser.id || prev.email !== newUser.email || prev.role !== newUser.role) {
+              return newUser;
+            }
+            return prev;
+          });
+          
+          setToken(prev => {
+            if (prev !== session.access_token) {
+              return session.access_token;
+            }
+            return prev;
+          });
         } catch (apiError: any) {
           console.error('❌ [AuthContext] Error from /me endpoint:', apiError);
           
@@ -103,9 +127,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setToken(null);
     } finally {
       setLoading(false);
+      isRefreshingRef.current = false;
       console.log('✅ [AuthContext] refreshUser completed');
     }
-  };
+  }, []);
 
   useEffect(() => {
     console.log('🚀 [AuthContext] Initializing...');
@@ -141,17 +166,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }, 4 * 60 * 1000); // Every 4 minutes
 
-    setRefreshInterval(interval);
+    refreshIntervalRef.current = interval;
 
     return () => {
       subscription.unsubscribe();
-      if (interval) {
-        clearInterval(interval);
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
       }
     };
-  }, []);
+  }, [refreshUser]);
 
-  const signIn = async (email: string, password: string) => {
+  const signIn = useCallback(async (email: string, password: string) => {
     // Validate email ends with @kku.edu.sa
     if (!email.endsWith('@kku.edu.sa')) {
       throw new Error('Email must end with @kku.edu.sa');
@@ -169,9 +194,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (data.session?.access_token) {
       await refreshUser();
     }
-  };
+  }, [refreshUser]);
 
-  const signUp = async (
+  const signUp = useCallback(async (
     email: string,
     password: string,
     fullName: string,
@@ -206,26 +231,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     // Sign in after signup
     await signIn(email, password);
-  };
+  }, [signIn]);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     console.log('🚪 [AuthContext] Signing out...');
     
     // Clear interval
-    if (refreshInterval) {
-      clearInterval(refreshInterval);
-      setRefreshInterval(null);
+    if (refreshIntervalRef.current) {
+      clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
     }
     
-    await supabase.auth.signOut();
+    // Clear state immediately
     setUser(null);
     setToken(null);
     
-    console.log('✅ [AuthContext] Signed out successfully');
-  };
+    // Sign out from Supabase
+    try {
+      await supabase.auth.signOut();
+      console.log('✅ [AuthContext] Signed out from Supabase');
+    } catch (error) {
+      console.error('❌ [AuthContext] Error signing out:', error);
+    }
+    
+    // Force reload to clear any cached state
+    window.location.reload();
+  }, []);
+
+  // Memoize the context value to prevent unnecessary re-renders
+  const contextValue = useMemo(() => ({
+    user,
+    token,
+    loading,
+    signIn,
+    signUp,
+    signOut,
+    refreshUser,
+  }), [user, token, loading, signIn, signUp, signOut, refreshUser]);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, signIn, signUp, signOut, refreshUser }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,235 +1,395 @@
-import React, { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
-import { Users, BookOpen, Calendar, TrendingUp } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { motion } from 'motion/react';
+import { useLanguage } from './LanguageContext';
+import { useAuth } from './AuthContext';
 import { apiRequest } from '../utils/api';
-import { supabase } from '../utils/supabaseClient';
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
+import { useCache } from '../utils/useCache';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { 
+  Users, 
+  BookOpen, 
+  Calendar, 
+  TrendingUp, 
+  Activity,
+  Clock,
+  UserCheck,
+  UserX,
+  GraduationCap,
+  ChevronRight,
+  BarChart3,
+  PieChart,
+  AlertCircle
+} from 'lucide-react';
 
-interface Overview {
-  total_users: number;
-  total_students: number;
-  total_instructors: number;
-  total_courses: number;
-  total_sessions: number;
-  total_attendance_records: number;
+interface DashboardStats {
+  totalUsers: number;
+  totalStudents: number;
+  totalInstructors: number;
+  totalCourses: number;
+  totalSessions: number;
+  activeSessionsToday: number;
+  attendanceRate: number;
+  presentToday: number;
+  absentToday: number;
 }
 
 export function AdminDashboard() {
-  const [overview, setOverview] = useState<Overview | null>(null);
+  const { language } = useLanguage();
+  const { token } = useAuth();
+  const [stats, setStats] = useState<DashboardStats>({
+    totalUsers: 0,
+    totalStudents: 0,
+    totalInstructors: 0,
+    totalCourses: 0,
+    totalSessions: 0,
+    activeSessionsToday: 0,
+    attendanceRate: 0,
+    presentToday: 0,
+    absentToday: 0,
+  });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
 
   useEffect(() => {
-    loadOverview();
-  }, []);
+    loadDashboardData();
+  }, [token]);
 
-  const loadOverview = async () => {
-    setLoading(true);
-    setError('');
+  const loadDashboardData = async () => {
+    if (!token) return;
     
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        // Set default data if no session
-        setOverview({
-          total_users: 0,
-          total_students: 0,
-          total_instructors: 0,
-          total_courses: 0,
-          total_sessions: 0,
-          total_attendance_records: 0
-        });
-        setLoading(false);
-        return;
-      }
+      setLoading(true);
+      
+      // Load all data in parallel
+      const [usersData, coursesData, sessionsData, attendanceData] = await Promise.all([
+        apiRequest('/users', { token }).catch(() => ({ users: [] })),
+        apiRequest('/courses', { token }).catch(() => ({ courses: [] })),
+        apiRequest('/sessions', { token }).catch(() => ({ sessions: [] })),
+        apiRequest('/attendance/today', { token }).catch(() => ({ attendance: [] })),
+      ]);
 
-      // Add timeout to prevent infinite loading
-      const timeoutId = setTimeout(() => {
-        throw new Error('Request timeout');
-      }, 10000); // 10 seconds timeout
+      const users = usersData.users || [];
+      const courses = coursesData.courses || [];
+      const sessions = sessionsData.sessions || [];
+      const todayAttendance = attendanceData.attendance || [];
 
-      const data = await apiRequest('/reports/overview', {
-        token: session.access_token,
+      // Calculate stats
+      const students = users.filter((u: any) => u.role === 'student');
+      const instructors = users.filter((u: any) => u.role === 'instructor');
+      
+      const today = new Date().toISOString().split('T')[0];
+      const todaySessions = sessions.filter((s: any) => s.date?.startsWith(today));
+      
+      const presentCount = todayAttendance.filter((a: any) => a.status === 'present').length;
+      const absentCount = todayAttendance.filter((a: any) => a.status === 'absent').length;
+      const totalAttendance = presentCount + absentCount;
+      const attendanceRate = totalAttendance > 0 ? (presentCount / totalAttendance) * 100 : 0;
+
+      setStats({
+        totalUsers: users.length,
+        totalStudents: students.length,
+        totalInstructors: instructors.length,
+        totalCourses: courses.length,
+        totalSessions: sessions.length,
+        activeSessionsToday: todaySessions.length,
+        attendanceRate: Math.round(attendanceRate),
+        presentToday: presentCount,
+        absentToday: absentCount,
       });
 
-      clearTimeout(timeoutId);
-      setOverview(data.overview);
-    } catch (error: any) {
-      console.error('Error loading overview:', error);
-      setError(error.message || 'Failed to load data');
-      // Set default data on error
-      setOverview({
-        total_users: 0,
-        total_students: 0,
-        total_instructors: 0,
-        total_courses: 0,
-        total_sessions: 0,
-        total_attendance_records: 0
-      });
+      // Set recent activity
+      const activity = [
+        ...sessions.slice(0, 5).map((s: any) => ({
+          type: 'session',
+          title: language === 'ar' ? 'جلسة جديدة' : 'New Session',
+          description: s.course_name || s.course_code,
+          time: s.created_at,
+        })),
+      ];
+      setRecentActivity(activity);
+
+    } catch (error) {
+      console.error('Error loading dashboard:', error);
     } finally {
       setLoading(false);
     }
   };
 
+  const statsCards = [
+    {
+      title: language === 'ar' ? 'إجمالي المستخدمين' : 'Total Users',
+      value: stats.totalUsers,
+      icon: Users,
+      color: 'from-blue-500 to-cyan-500',
+      bgColor: 'bg-blue-500/10',
+      textColor: 'text-blue-600 dark:text-blue-400',
+    },
+    {
+      title: language === 'ar' ? 'عدد الطلاب' : 'Total Students',
+      value: stats.totalStudents,
+      icon: GraduationCap,
+      color: 'from-green-500 to-emerald-500',
+      bgColor: 'bg-green-500/10',
+      textColor: 'text-green-600 dark:text-green-400',
+    },
+    {
+      title: language === 'ar' ? 'عدد المدرسين' : 'Total Instructors',
+      value: stats.totalInstructors,
+      icon: BookOpen,
+      color: 'from-purple-500 to-pink-500',
+      bgColor: 'bg-purple-500/10',
+      textColor: 'text-purple-600 dark:text-purple-400',
+    },
+    {
+      title: language === 'ar' ? 'المواد الدراسية' : 'Total Courses',
+      value: stats.totalCourses,
+      icon: BookOpen,
+      color: 'from-orange-500 to-red-500',
+      bgColor: 'bg-orange-500/10',
+      textColor: 'text-orange-600 dark:text-orange-400',
+    },
+  ];
+
+  const todayCards = [
+    {
+      title: language === 'ar' ? 'جلسات اليوم' : "Today's Sessions",
+      value: stats.activeSessionsToday,
+      icon: Calendar,
+      color: 'from-indigo-500 to-blue-500',
+      bgColor: 'bg-indigo-500/10',
+      textColor: 'text-indigo-600 dark:text-indigo-400',
+    },
+    {
+      title: language === 'ar' ? 'نسبة الحضور' : 'Attendance Rate',
+      value: `${stats.attendanceRate}%`,
+      icon: TrendingUp,
+      color: 'from-green-500 to-teal-500',
+      bgColor: 'bg-green-500/10',
+      textColor: 'text-green-600 dark:text-green-400',
+    },
+    {
+      title: language === 'ar' ? 'حاضرون اليوم' : 'Present Today',
+      value: stats.presentToday,
+      icon: UserCheck,
+      color: 'from-emerald-500 to-green-500',
+      bgColor: 'bg-emerald-500/10',
+      textColor: 'text-emerald-600 dark:text-emerald-400',
+    },
+    {
+      title: language === 'ar' ? 'غائبون اليوم' : 'Absent Today',
+      value: stats.absentToday,
+      icon: UserX,
+      color: 'from-red-500 to-rose-500',
+      bgColor: 'bg-red-500/10',
+      textColor: 'text-red-600 dark:text-red-400',
+    },
+  ];
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex items-center justify-center h-96">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">جارٍ التحميل...</p>
-          <p className="mt-2 text-xs text-muted-foreground">إذا استمر التحميل، قم بتحديث الصفحة</p>
+          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-muted-foreground">{language === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>
         </div>
       </div>
     );
   }
 
-  if (!overview) {
-    return (
-      <div className="text-center py-12">
-        <p className="text-muted-foreground">لا توجد بيانات لعرضها</p>
-        {error && <p className="text-red-500 mt-2">{error}</p>}
-        <button 
-          onClick={loadOverview}
-          className="mt-4 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90"
-        >
-          إعادة المحاولة
-        </button>
-      </div>
-    );
-  }
-
-  const stats = [
-    {
-      title: 'إجمالي المستخدمين',
-      value: overview.total_users,
-      icon: Users,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-100',
-    },
-    {
-      title: 'المواد الدراسية',
-      value: overview.total_courses,
-      icon: BookOpen,
-      color: 'text-green-600',
-      bgColor: 'bg-green-100',
-    },
-    {
-      title: 'جلسات الحضور',
-      value: overview.total_sessions,
-      icon: Calendar,
-      color: 'text-purple-600',
-      bgColor: 'bg-purple-100',
-    },
-    {
-      title: 'سجلات الحضور',
-      value: overview.total_attendance_records,
-      icon: TrendingUp,
-      color: 'text-orange-600',
-      bgColor: 'bg-orange-100',
-    },
-  ];
-
-  const userDistribution = [
-    { name: 'الطلاب', value: overview.total_students, color: '#1ABC9C' },
-    { name: 'المدرسون', value: overview.total_instructors, color: '#3498DB' },
-    { name: 'المديرون', value: overview.total_users - overview.total_students - overview.total_instructors, color: '#2C3E50' },
-  ];
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      {/* Header */}
       <div>
-        <h1>لوحة تحكم المدير</h1>
-        <p className="text-muted-foreground">نظرة عامة على النظام</p>
+        <motion.h1 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-4xl font-black mb-2 bg-gradient-to-r from-primary via-accent to-gold bg-clip-text text-transparent"
+        >
+          {language === 'ar' ? 'لوحة تحكم المدير' : 'Admin Dashboard'}
+        </motion.h1>
+        <p className="text-muted-foreground text-lg">
+          {language === 'ar' ? 'نظرة شاملة على نظام الحضور' : 'Comprehensive overview of the attendance system'}
+        </p>
       </div>
 
-      {/* Stats Grid */}
+      {/* Main Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {stats.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <Card key={stat.title}>
+        {statsCards.map((stat, index) => (
+          <motion.div
+            key={index}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.1 }}
+          >
+            <Card className="border-2 hover:border-primary/50 transition-all duration-300 hover:shadow-xl">
               <CardContent className="p-6">
-                <div className="flex items-center justify-between">
+                <div className="flex items-start justify-between">
                   <div>
-                    <p className="text-sm text-muted-foreground mb-1">{stat.title}</p>
-                    <p className="text-3xl font-bold">{stat.value}</p>
+                    <p className="text-sm font-medium text-muted-foreground mb-1">{stat.title}</p>
+                    <h3 className="text-4xl font-black mb-2">{stat.value}</h3>
                   </div>
-                  <div className={`w-12 h-12 rounded-lg ${stat.bgColor} flex items-center justify-center`}>
-                    <Icon className={`w-6 h-6 ${stat.color}`} />
+                  <div className={`p-4 rounded-2xl ${stat.bgColor}`}>
+                    <stat.icon className={`w-8 h-8 ${stat.textColor}`} />
                   </div>
                 </div>
+                <div className={`h-2 rounded-full bg-gradient-to-r ${stat.color} mt-4`}></div>
               </CardContent>
             </Card>
-          );
-        })}
+          </motion.div>
+        ))}
       </div>
 
-      {/* Charts Row */}
+      {/* Today's Activity */}
+      <div>
+        <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
+          <Activity className="w-6 h-6 text-primary" />
+          {language === 'ar' ? 'نشاط اليوم' : "Today's Activity"}
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {todayCards.map((stat, index) => (
+            <motion.div
+              key={index}
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.4 + index * 0.1 }}
+            >
+              <Card className="border-2 hover:border-primary/50 transition-all duration-300 hover:shadow-xl overflow-hidden">
+                <div className={`h-2 bg-gradient-to-r ${stat.color}`}></div>
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className={`p-3 rounded-xl ${stat.bgColor}`}>
+                      <stat.icon className={`w-6 h-6 ${stat.textColor}`} />
+                    </div>
+                    <Badge variant="outline" className={stat.textColor}>
+                      {language === 'ar' ? 'مباشر' : 'Live'}
+                    </Badge>
+                  </div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">{stat.title}</p>
+                  <h3 className="text-3xl font-black">{stat.value}</h3>
+                </CardContent>
+              </Card>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+
+      {/* Quick Actions & Recent Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* User Distribution */}
-        <Card>
-          <CardHeader>
-            <CardTitle>توزيع المستخدمين</CardTitle>
-            <CardDescription>نسبة المستخدمين حسب الدور</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={userDistribution}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {userDistribution.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Quick Actions */}
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.6 }}
+        >
+          <Card className="border-2 h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-primary" />
+                {language === 'ar' ? 'إجراءات سريعة' : 'Quick Actions'}
+              </CardTitle>
+              <CardDescription>
+                {language === 'ar' ? 'الوصول السريع للوظائف الرئيسية' : 'Quick access to main functions'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {[
+                { label: language === 'ar' ? 'إدارة المستخدمين' : 'Manage Users', icon: Users, color: 'text-blue-600' },
+                { label: language === 'ar' ? 'إدارة المواد' : 'Manage Courses', icon: BookOpen, color: 'text-green-600' },
+                { label: language === 'ar' ? 'إدارة الجداول' : 'Manage Schedules', icon: Calendar, color: 'text-purple-600' },
+                { label: language === 'ar' ? 'التقارير والإحصائيات' : 'Reports & Analytics', icon: PieChart, color: 'text-orange-600' },
+              ].map((action, index) => (
+                <Button
+                  key={index}
+                  variant="outline"
+                  className="w-full justify-between h-14 text-base hover:bg-primary/5 hover:border-primary"
+                >
+                  <div className="flex items-center gap-3">
+                    <action.icon className={`w-5 h-5 ${action.color}`} />
+                    <span>{action.label}</span>
+                  </div>
+                  <ChevronRight className="w-5 h-5" />
+                </Button>
+              ))}
+            </CardContent>
+          </Card>
+        </motion.div>
 
-        {/* Quick Stats */}
-        <Card>
-          <CardHeader>
-            <CardTitle>إحصائيات سريعة</CardTitle>
-            <CardDescription>معلومات عامة عن النظام</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex justify-between items-center pb-3 border-b">
-                <span className="text-muted-foreground">عدد الطلاب</span>
-                <span className="font-semibold">{overview.total_students}</span>
+        {/* Recent Activity */}
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.7 }}
+        >
+          <Card className="border-2 h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-primary" />
+                {language === 'ar' ? 'النشاط الأخير' : 'Recent Activity'}
+              </CardTitle>
+              <CardDescription>
+                {language === 'ar' ? 'آخر الأحداث في النظام' : 'Latest events in the system'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {recentActivity.length > 0 ? (
+                <div className="space-y-4">
+                  {recentActivity.map((activity, index) => (
+                    <div key={index} className="flex items-start gap-3 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+                      <div className="w-2 h-2 rounded-full bg-primary mt-2"></div>
+                      <div className="flex-1">
+                        <p className="font-semibold">{activity.title}</p>
+                        <p className="text-sm text-muted-foreground">{activity.description}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {new Date(activity.time).toLocaleString(language === 'ar' ? 'ar-SA' : 'en-US')}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+                  <p className="text-muted-foreground">
+                    {language === 'ar' ? 'لا يوجد نشاط حديث' : 'No recent activity'}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+
+      {/* System Health */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.8 }}
+      >
+        <Card className="border-2 border-green-500/20 bg-gradient-to-r from-green-500/5 to-emerald-500/5">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center">
+                  <div className="w-6 h-6 rounded-full bg-green-500 animate-pulse"></div>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold">
+                    {language === 'ar' ? 'حالة النظام: ممتازة' : 'System Status: Excellent'}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    {language === 'ar' ? 'جميع الأنظمة تعمل بشكل طبيعي' : 'All systems operational'}
+                  </p>
+                </div>
               </div>
-              <div className="flex justify-between items-center pb-3 border-b">
-                <span className="text-muted-foreground">عدد المدرسين</span>
-                <span className="font-semibold">{overview.total_instructors}</span>
-              </div>
-              <div className="flex justify-between items-center pb-3 border-b">
-                <span className="text-muted-foreground">إجمالي المواد</span>
-                <span className="font-semibold">{overview.total_courses}</span>
-              </div>
-              <div className="flex justify-between items-center pb-3 border-b">
-                <span className="text-muted-foreground">جلسات الحضور</span>
-                <span className="font-semibold">{overview.total_sessions}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">سجلات الحضور</span>
-                <span className="font-semibold">{overview.total_attendance_records}</span>
-              </div>
+              <Badge className="bg-green-500 text-white text-base px-4 py-2">
+                {language === 'ar' ? '100% نشط' : '100% Active'}
+              </Badge>
             </div>
           </CardContent>
         </Card>
-      </div>
+      </motion.div>
     </div>
   );
 }

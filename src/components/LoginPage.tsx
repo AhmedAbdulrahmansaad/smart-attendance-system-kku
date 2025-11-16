@@ -81,7 +81,7 @@ export function LoginPage({ onBack }: LoginPageProps) {
     { value: 'student', labelAr: 'طالب', labelEn: 'Student', icon: Users, color: 'from-blue-500 to-cyan-500' },
     { value: 'instructor', labelAr: 'مدرس', labelEn: 'Instructor', icon: GraduationCap, color: 'from-green-500 to-emerald-500' },
     { value: 'supervisor', labelAr: 'مشرف', labelEn: 'Supervisor', icon: Shield, color: 'from-purple-500 to-pink-500' },
-    { value: 'admin', labelAr: 'دير', labelEn: 'Admin', icon: Sparkles, color: 'from-orange-500 to-red-500' },
+    { value: 'admin', labelAr: 'مدير', labelEn: 'Admin', icon: Sparkles, color: 'from-orange-500 to-red-500' },
   ];
 
   return (
