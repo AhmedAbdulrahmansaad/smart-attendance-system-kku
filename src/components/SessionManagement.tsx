@@ -42,6 +42,8 @@ interface Session {
   title?: string;
   description?: string;
   stream_active?: boolean;
+  meeting_url?: string;
+  attendance_code?: string;
 }
 
 interface Course {
@@ -242,6 +244,64 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
   const openDeleteDialog = (session: Session) => {
     setSessionToDelete(session);
     setIsDeleteDialogOpen(true);
+  };
+
+  const handleStartLiveStream = async (session: Session) => {
+    try {
+      setError('');
+      console.log('🎬 Starting live stream for session:', session.id);
+      
+      const { data: { session: authSession } } = await supabase.auth.getSession();
+      if (!authSession?.access_token) {
+        setError('غير مصرح. يرجى تسجيل الدخول مرة أخرى.');
+        return;
+      }
+
+      // Call the backend to start the live session
+      const result = await apiRequest(`/live-sessions/${session.id}/start`, {
+        method: 'POST',
+        token: authSession.access_token,
+      });
+
+      console.log('✅ Live session started:', result);
+      
+      // Update the session with meeting URL and attendance code
+      const updatedSession = {
+        ...session,
+        meeting_url: result.session.meeting_url,
+        attendance_code: result.session.attendance_code,
+      };
+      
+      setActiveStreamSession(updatedSession);
+    } catch (err: any) {
+      console.error('❌ Error starting live stream:', err);
+      setError(err.message || 'فشل بدء البث المباشر');
+    }
+  };
+
+  const handleStopLiveStream = async () => {
+    try {
+      if (!activeStreamSession) return;
+
+      console.log('🛑 Stopping live stream for session:', activeStreamSession.id);
+      
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      await apiRequest(`/live-sessions/${activeStreamSession.id}/end`, {
+        method: 'POST',
+        token: session.access_token,
+      });
+
+      console.log('✅ Live session ended');
+      setActiveStreamSession(null);
+      await loadAllSessions();
+    } catch (err: any) {
+      console.error('❌ Error stopping live stream:', err);
+      setError(err.message || 'فشل إيقاف البث المباشر');
+      // Still close the dialog even if the API call fails
+      setActiveStreamSession(null);
+    }
   };
 
   const handleCopyCode = (code: string) => {
@@ -559,7 +619,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
                   {session.session_type === 'live' && (
                     <Button
                       className="w-full"
-                      onClick={() => setActiveStreamSession(session)}
+                      onClick={() => handleStartLiveStream(session)}
                     >
                       <Video className="w-4 h-4 ml-2" />
                       بدء البث المباشر
@@ -716,7 +776,9 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
               <LiveStreamHost
                 sessionId={activeStreamSession.id}
                 sessionTitle={activeStreamSession.title || 'جلسة البث المباشر'}
-                onStop={() => setActiveStreamSession(null)}
+                meetingUrl={activeStreamSession.meeting_url || ''}
+                attendanceCode={activeStreamSession.attendance_code || activeStreamSession.code}
+                onStop={() => handleStopLiveStream()}
               />
             </div>
           </DialogContent>

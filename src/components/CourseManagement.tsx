@@ -12,7 +12,7 @@ import {
   DialogTrigger,
 } from './ui/dialog';
 import { Alert, AlertDescription } from './ui/alert';
-import { BookOpen, Plus, Trash2, Search, AlertCircle, Users as UsersIcon } from 'lucide-react';
+import { BookOpen, Plus, Trash2, Search, AlertCircle, Users as UsersIcon, CheckCircle } from 'lucide-react';
 import { apiRequest } from '../utils/api';
 import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthContext';
@@ -181,11 +181,21 @@ export function CourseManagement() {
         token: session.access_token,
       });
 
+      // Success!
+      const selectedStudent = students.find(s => s.id === selectedStudentId);
+      const selectedCourse = courses.find(c => c.id === selectedCourseId);
+      
+      alert(
+        language === 'ar' 
+          ? `✅ تم تسجيل الطالب ${selectedStudent?.full_name} في المقرر ${selectedCourse?.course_name} بنجاح!\n\nالمقرر سيظهر الآن في لوحة الطالب.`
+          : `✅ Student ${selectedStudent?.full_name} has been successfully enrolled in ${selectedCourse?.course_name}!\n\nThe course will now appear in the student's dashboard.`
+      );
+
       setEnrollDialogOpen(false);
       setSelectedStudentId('');
       setSelectedCourseId('');
     } catch (err: any) {
-      setError(err.message || 'فشل تسجيل الطالب');
+      setError(err.message || (language === 'ar' ? 'فشل تسجيل الطالب' : 'Failed to enroll student'));
     }
   };
 

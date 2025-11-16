@@ -23,12 +23,11 @@ interface Session {
   active: boolean;
   expires_at: string;
   viewers_count?: number;
-}
-
-interface Course {
-  id: string;
-  course_name: string;
-  course_code: string;
+  meeting_url?: string;
+  course_name?: string;
+  course_code?: string;
+  instructor_name?: string;
+  instructor_id?: string;
 }
 
 export function StudentAttendance() {

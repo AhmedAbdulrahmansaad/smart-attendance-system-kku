@@ -11,6 +11,7 @@ import { DashboardLayout } from './components/DashboardLayout';
 import { Button } from './components/ui/button';
 import { isSupabaseConfigured } from './utils/supabaseClient';
 import { LoadingFallback } from './components/LoadingFallback';
+import { Toaster } from 'sonner@2.0.3';
 
 // Lazy load heavy components for better performance
 const AdminDashboard = lazy(() => import('./components/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
@@ -310,6 +311,7 @@ export default function App() {
           <LanguageProvider>
             <AuthProvider>
               <AppContent />
+              <Toaster position="top-center" richColors closeButton />
             </AuthProvider>
           </LanguageProvider>
         </ThemeProvider>

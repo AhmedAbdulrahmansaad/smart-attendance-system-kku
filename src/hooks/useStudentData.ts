@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest } from '../utils/api';
+import { useEffect, useRef } from 'react';
+import { supabase } from '../utils/supabaseClient';
 
 interface UseStudentDataOptions {
   token: string | null;
@@ -8,7 +10,7 @@ interface UseStudentDataOptions {
 }
 
 export function useStudentCourses({ token, userId, enabled = true }: UseStudentDataOptions) {
-  return useQuery({
+  const query = useQuery({
     queryKey: ['student-courses', userId],
     queryFn: async () => {
       if (!token || !userId) throw new Error('No token or userId');
@@ -25,8 +27,8 @@ export function useStudentCourses({ token, userId, enabled = true }: UseStudentD
         // Return only needed fields to reduce memory
         return studentCourses.map((c: any) => ({
           id: c.id,
-          code: c.code,
-          name: c.name,
+          code: c.course_code || c.code,
+          name: c.course_name || c.name,
           instructor_id: c.instructor_id,
           instructor_name: c.instructor_name,
           credits: c.credits,
@@ -42,6 +44,57 @@ export function useStudentCourses({ token, userId, enabled = true }: UseStudentD
     retry: 2,
     retryDelay: 1000,
   });
+
+  // Use ref to avoid dependency issues
+  const refetchRef = useRef(query.refetch);
+  refetchRef.current = query.refetch;
+
+  // Setup realtime listener for enrollment changes
+  useEffect(() => {
+    if (!userId || !enabled) return;
+
+    console.log('🔔 Setting up realtime listener for student enrollments:', userId);
+    
+    // Subscribe to changes in kv_store table for this user's enrollments
+    const channel = supabase
+      .channel(`enrollment-changes-${userId}`)
+      .on(
+        'postgres_changes',
+        { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'kv_store_90ad488b',
+          filter: `key=like.enrollment:${userId}:%`
+        },
+        (payload) => {
+          console.log('🎉 New enrollment detected!', payload);
+          // Invalidate and refetch courses immediately
+          refetchRef.current();
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔔 Realtime subscription status:', status);
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('⚠️ Realtime subscription failed. Using polling as fallback.');
+        }
+      });
+
+    // Fallback: Polling every 10 seconds as backup
+    // This ensures updates even if Realtime doesn't work
+    const pollingInterval = setInterval(() => {
+      console.log('🔄 Polling for enrollment changes...');
+      refetchRef.current();
+    }, 10000); // Poll every 10 seconds
+
+    // Cleanup subscription and polling on unmount
+    return () => {
+      console.log('🔕 Cleaning up realtime listener and polling');
+      supabase.removeChannel(channel);
+      clearInterval(pollingInterval);
+    };
+  }, [userId, enabled]);
+
+  return query;
 }
 
 export function useStudentSessions({ token, courseIds, enabled = true }: { token: string | null; courseIds: string[]; enabled?: boolean }) {

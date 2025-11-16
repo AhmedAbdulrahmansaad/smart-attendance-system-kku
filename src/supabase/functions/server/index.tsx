@@ -367,19 +367,23 @@ app.delete("/make-server-90ad488b/courses/:courseId", async (c) => {
 
 app.post("/make-server-90ad488b/enrollments", async (c) => {
   try {
+    console.log('📝 POST /enrollments - Enrollment request received');
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
     if (error || !user) {
+      console.log('❌ Enrollment error: Unauthorized');
       return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
     if (user.role !== 'admin') {
+      console.log('❌ Enrollment error: Not admin');
       return c.json({ error: 'Admin access required' }, 403);
     }
     
     const { student_id, course_id } = await c.req.json();
     
     if (!student_id || !course_id) {
+      console.log('❌ Enrollment error: Missing fields');
       return c.json({ error: 'Missing required fields' }, 400);
     }
     
@@ -389,11 +393,18 @@ app.post("/make-server-90ad488b/enrollments", async (c) => {
       enrolled_at: new Date().toISOString()
     };
     
+    console.log('💾 Saving enrollment to KV store:', { 
+      key: `enrollment:${student_id}:${course_id}`,
+      value: enrollment 
+    });
+    
     await kv.set(`enrollment:${student_id}:${course_id}`, enrollment);
+    
+    console.log('✅ Enrollment saved successfully! This should trigger Realtime update for student:', student_id);
     
     return c.json({ message: 'Student enrolled successfully', enrollment });
   } catch (error) {
-    console.log('Create enrollment error:', error);
+    console.log('❌ Create enrollment error:', error);
     return c.json({ error: 'Internal server error while creating enrollment' }, 500);
   }
 });

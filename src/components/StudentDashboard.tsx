@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
@@ -6,6 +6,7 @@ import { useStudentStats } from '../hooks/useStudentData';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { toast } from 'sonner@2.0.3';
 import { 
   BookOpen, 
   Calendar, 
@@ -28,6 +29,26 @@ export function StudentDashboard() {
     token,
     userId: user?.id || null,
   });
+
+  // Track previous courses count to detect new enrollments
+  const prevCoursesCountRef = useRef<number>(courses.length);
+
+  // Show notification when a new course is added
+  useEffect(() => {
+    if (courses.length > prevCoursesCountRef.current && prevCoursesCountRef.current > 0) {
+      const newCourse = courses[courses.length - 1]; // Get the latest course
+      toast.success(
+        language === 'ar' 
+          ? `🎉 تم تسجيلك في مقرر جديد: ${newCourse.name || newCourse.code}`
+          : `🎉 You've been enrolled in: ${newCourse.name || newCourse.code}`,
+        {
+          duration: 5000,
+          position: 'top-center',
+        }
+      );
+    }
+    prevCoursesCountRef.current = courses.length;
+  }, [courses, language]);
 
   // Memoize expensive computations
   const upcomingSessions = useMemo(() => {
