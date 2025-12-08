@@ -76,18 +76,10 @@ export function TeamPage({ onBack }: { onBack: () => void }) {
 
   const supervisors = [
     {
-      name: 'د. أحمد بن محمد',
-      nameEn: 'Dr. Ahmed Bin Mohammed',
-      role: 'المشرف الأكاديمي الرئيسي',
-      roleEn: 'Main Academic Supervisor',
-      department: 'قسم علوم الحاسب',
-      departmentEn: 'Computer Science Department'
-    },
-    {
       name: 'د. منال سعيد بن محمد أبو ملحة',
       nameEn: 'Dr. Manal Saeed Bin Mohammed Abu Malhah',
-      role: 'المشرف الأكاديمي المشارك',
-      roleEn: 'Co-Academic Supervisor',
+      role: 'المشرف الأكاديمي الرئيسي',
+      roleEn: 'Main Academic Supervisor',
       department: 'قسم تقنية المعلومات',
       departmentEn: 'Information Technology Department'
     },

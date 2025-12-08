@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Alert, AlertDescription } from './ui/alert';
 import { GraduationCap, AlertCircle, Globe, Moon, Sun, ArrowLeft, Sparkles, Shield, Users } from 'lucide-react';
+import { AlreadyRegisteredHelper } from './AlreadyRegisteredHelper';
 
 interface LoginPageProps {
   onBack: () => void;
@@ -24,6 +25,8 @@ export function LoginPage({ onBack }: LoginPageProps) {
   
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showAlreadyRegistered, setShowAlreadyRegistered] = useState(false);
+  const [currentTab, setCurrentTab] = useState<'signin' | 'signup'>('signin');
 
   // Sign in state
   const [signInEmail, setSignInEmail] = useState('');
@@ -56,18 +59,61 @@ export function LoginPage({ onBack }: LoginPageProps) {
     setIsLoading(true);
 
     try {
-      // Validate university ID for students only
-      if (signUpRole === 'student' && !signUpUniversityId.trim()) {
+      // Validate email domain
+      if (!signUpEmail.endsWith('@kku.edu.sa')) {
         setError(language === 'ar' 
-          ? 'الرقم الجامعي مطلوب للطلاب' 
-          : 'University ID is required for students');
+          ? 'يجب استخدام البريد الجامعي @kku.edu.sa' 
+          : 'Must use university email @kku.edu.sa');
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate university ID for students only
+      if (signUpRole === 'student') {
+        if (!signUpUniversityId.trim()) {
+          setError(language === 'ar' 
+            ? 'الرقم الجامعي مطلوب للطلاب' 
+            : 'University ID is required for students');
+          setIsLoading(false);
+          return;
+        }
+
+        // Validate university ID format: 9 digits starting with 44
+        const universityIdRegex = /^44\\d{7}$/;
+        if (!universityIdRegex.test(signUpUniversityId)) {
+          setError(language === 'ar' 
+            ? 'الرقم الجامعي يجب أن يكون 9 أرقام ويبدأ بـ 44 (مثال: 441234567)' 
+            : 'University ID must be 9 digits starting with 44 (e.g., 441234567)');
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // Validate password strength
+      if (signUpPassword.length < 6) {
+        setError(language === 'ar' 
+          ? 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' 
+          : 'Password must be at least 6 characters');
         setIsLoading(false);
         return;
       }
 
       await signUp(signUpEmail, signUpPassword, signUpFullName, signUpRole, signUpUniversityId);
     } catch (err: any) {
-      setError(err.message || t('loginError'));
+      // Handle specific error messages
+      const errorMessage = err.message || '';
+      
+      if (errorMessage.includes('Email already registered')) {
+        setError(language === 'ar' 
+          ? 'البريد الإلكتروني مسجل مسبقاً. هل لديك حساب؟ انتقل إلى تسجيل الدخول.' 
+          : 'Email already registered. Already have an account? Go to Sign In.');
+      } else if (errorMessage.includes('University ID already registered')) {
+        setError(language === 'ar' 
+          ? 'الرقم الجامعي مسجل مسبقاً. هل لديك حساب؟ انتقل إلى تسجيل الدخول.' 
+          : 'University ID already registered. Already have an account? Go to Sign In.');
+      } else {
+        setError(errorMessage || t('loginError'));
+      }
     } finally {
       setIsLoading(false);
     }

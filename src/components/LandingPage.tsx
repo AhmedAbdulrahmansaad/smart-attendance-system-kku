@@ -24,6 +24,8 @@ import {
   Target,
   Mail
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '../utils/supabaseClient';
 
 interface LandingPageProps {
   onNavigate: (page: 'login' | 'team' | 'health-check') => void;
@@ -34,6 +36,52 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
   const { theme, toggleTheme } = useTheme();
   const t = useTranslation(language);
 
+  // جلب الإحصائيات الحقيقية من قاعدة البيانات
+  const { data: realStats } = useQuery({
+    queryKey: ['landing-stats'],
+    queryFn: async () => {
+      // عدد الطلاب النشطين
+      const { count: studentsCount } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('role', 'student');
+
+      // عدد أعضاء هيئة التدريس
+      const { count: instructorsCount } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('role', 'instructor');
+
+      // عدد المقررات
+      const { count: coursesCount } = await supabase
+        .from('courses')
+        .select('*', { count: 'exact', head: true });
+
+      // حساب نسبة الحضور
+      const { count: totalRecords } = await supabase
+        .from('attendance_records')
+        .select('*', { count: 'exact', head: true });
+
+      const { count: presentRecords } = await supabase
+        .from('attendance_records')
+        .select('*', { count: 'exact', head: true })
+        .in('attendance_status', ['present', 'late']);
+
+      const attendanceRate = totalRecords && totalRecords > 0
+        ? Math.round((presentRecords || 0) / totalRecords * 100 * 10) / 10
+        : 99.8;
+
+      return {
+        studentsCount: studentsCount || 0,
+        instructorsCount: instructorsCount || 0,
+        coursesCount: coursesCount || 0,
+        attendanceRate
+      };
+    },
+    refetchInterval: 30000, // تحديث كل 30 ثانية
+    staleTime: 20000
+  });
+
   const toggleLanguage = () => {
     setLanguage(language === 'ar' ? 'en' : 'ar');
   };
@@ -41,43 +89,67 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
   const features = [
     {
       icon: Fingerprint,
-      titleAr: 'التعرف على بصمة الإصبع',
-      titleEn: 'Fingerprint Recognition',
-      descAr: 'تقنية متقدمة للتعرف على البصمة لضمان دقة الحضور',
-      descEn: 'Advanced fingerprint recognition technology for accurate attendance',
+      titleAr: 'التعرف على بصمة الجهاز',
+      titleEn: 'Device Fingerprint',
+      descAr: 'تقنية متقدمة للتعرف على بصمة الجهاز الفريدة لضمان الأمان',
+      descEn: 'Advanced device fingerprint technology for enhanced security',
       color: 'from-emerald-500 via-green-500 to-teal-500'
     },
     {
       icon: QrCode,
-      titleAr: 'رموز QR الديناميكية',
-      titleEn: 'Dynamic QR Codes',
-      descAr: 'أكواد QR متغيرة لكل جلسة لأمان إضافي',
-      descEn: 'Dynamic QR codes for each session with enhanced security',
+      titleAr: 'رموز حضور ديناميكية',
+      titleEn: 'Dynamic Attendance Codes',
+      descAr: 'أكواد متغيرة لكل جلسة لأمان إضافي',
+      descEn: 'Dynamic codes for each session with enhanced security',
       color: 'from-blue-500 via-indigo-500 to-purple-500'
     },
     {
       icon: TrendingUp,
       titleAr: 'تحليلات ذكية',
       titleEn: 'Smart Analytics',
-      descAr: 'تقارير تفصيلية ورسوم بيانية توضيحية',
-      descEn: 'Detailed reports and illustrative charts',
+      descAr: 'تقارير تفصيلية ورسوم بيانية توضيحية فورية',
+      descEn: 'Detailed reports and real-time analytics',
       color: 'from-orange-500 via-amber-500 to-yellow-500'
     },
     {
       icon: Shield,
       titleAr: 'أمان متقدم',
       titleEn: 'Advanced Security',
-      descAr: 'تشفير بيانات من الطراز العالمي',
-      descEn: 'World-class data encryption',
+      descAr: 'حماية متعددة الطبقات ومنع تسجيل الدخول المتزامن',
+      descEn: 'Multi-layer security and concurrent login prevention',
       color: 'from-red-500 via-pink-500 to-rose-500'
     }
   ];
 
   const stats = [
-    { value: '15K+', labelAr: 'طالب نشط', labelEn: 'Active Students', icon: Users },
-    { value: '850+', labelAr: 'عضو هيئة تدريس', labelEn: 'Faculty Members', icon: Award },
-    { value: '250+', labelAr: 'برنامج أكاديمي', labelEn: 'Academic Programs', icon: BookOpen },
-    { value: '99.8%', labelAr: 'دقة النظام', labelEn: 'System Accuracy', icon: Target }
+    { 
+      value: realStats?.studentsCount.toString() || '0', 
+      labelAr: 'طالب نشط', 
+      labelEn: 'Active Students', 
+      icon: Users,
+      loading: !realStats 
+    },
+    { 
+      value: realStats?.instructorsCount.toString() || '0', 
+      labelAr: 'عضو هيئة تدريس', 
+      labelEn: 'Faculty Members', 
+      icon: Award,
+      loading: !realStats 
+    },
+    { 
+      value: realStats?.coursesCount.toString() || '0', 
+      labelAr: 'مقرر دراسي', 
+      labelEn: 'Courses', 
+      icon: BookOpen,
+      loading: !realStats 
+    },
+    { 
+      value: `${realStats?.attendanceRate || '99.8'}%`, 
+      labelAr: 'دقة النظام', 
+      labelEn: 'System Accuracy', 
+      icon: Target,
+      loading: !realStats 
+    }
   ];
 
   return (

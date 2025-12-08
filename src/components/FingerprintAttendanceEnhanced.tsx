@@ -66,7 +66,7 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
           verificationMethod: 'fingerprint',
           deviceId: navigator.userAgent,
           checks: {
-            patternMatch: '✓ Verified',
+            patternMatch: '✓ Pattern Verified',
             livenessDetection: '✓ Live Finger Detected',
             temperatureCheck: '✓ Temperature Normal',
             identityVerification: '✓ Identity Confirmed'
@@ -86,10 +86,10 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
         setVerificationDetails({
           error: failedCheck,
           message: 
-            failedCheck === 'patternMatch' ? 'Fingerprint pattern does not match' :
-            failedCheck === 'livenessDetection' ? 'Liveness detection failed - please use real finger' :
-            failedCheck === 'temperatureCheck' ? 'Temperature check failed' :
-            'Identity verification failed'
+            failedCheck === 'patternMatch' ? (language === 'ar' ? 'نمط البصمة غير متطابق' : 'Fingerprint pattern does not match') :
+            failedCheck === 'livenessDetection' ? (language === 'ar' ? 'فشل اكتشاف الإصبع الحي - الرجاء استخدام إصبع حقيقي' : 'Liveness detection failed - please use real finger') :
+            failedCheck === 'temperatureCheck' ? (language === 'ar' ? 'فشل فحص درجة الحرارة' : 'Temperature check failed') :
+            (language === 'ar' ? 'فشل التحقق من الهوية' : 'Identity verification failed')
         });
         
         setScanResult('error');
@@ -126,12 +126,12 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
       <CardHeader className="relative z-10">
         <CardTitle className="flex items-center gap-2">
           <Fingerprint className="w-6 h-6 text-primary" />
-          {language === 'ar' ? 'تسجيل الحضور ببصمة الإصبع' : 'Fingerprint Attendance'}
+          {language === 'ar' ? 'التحقق من الهوية ببصمة الإصبع' : 'Fingerprint Identity Verification'}
         </CardTitle>
         <CardDescription>
           {language === 'ar'
-            ? 'ضع إصبعك على المستشعر لتسجيل حضورك'
-            : 'Place your finger on the sensor to mark your attendance'}
+            ? 'ضع إصبعك على المستشعر للتحقق من هويتك وتسجيل حضورك'
+            : 'Place your finger on the sensor to verify your identity and mark attendance'}
         </CardDescription>
       </CardHeader>
 
@@ -246,7 +246,7 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
                 className="text-center"
               >
                 <p className="text-lg font-semibold text-primary">
-                  {language === 'ar' ? 'جارٍ المسح...' : 'Scanning...'}
+                  {language === 'ar' ? 'جارٍ التحقق من الهوية...' : 'Verifying Identity...'}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   {language === 'ar' ? 'الرجاء الانتظار' : 'Please wait'}
@@ -263,10 +263,10 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
                 className="text-center"
               >
                 <p className="text-lg font-semibold text-green-600">
-                  {language === 'ar' ? 'تم تسجيل الحضور بنجاح!' : 'Attendance Marked Successfully!'}
+                  {language === 'ar' ? 'تم التحقق من الهوية بنجاح!' : 'Identity Verified Successfully!'}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {language === 'ar' ? 'شكراً لك' : 'Thank you'}
+                  {language === 'ar' ? 'تم تسجيل حضورك' : 'Attendance marked'}
                 </p>
               </motion.div>
             )}
@@ -280,7 +280,7 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
                 className="text-center"
               >
                 <p className="text-lg font-semibold text-red-600">
-                  {language === 'ar' ? 'فشل التعرف على البصمة' : 'Fingerprint Not Recognized'}
+                  {language === 'ar' ? 'فشل التحقق من الهوية' : 'Verification Failed'}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   {language === 'ar' ? 'الرجاء المحاولة مرة أخرى' : 'Please try again'}
@@ -297,7 +297,7 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
                 className="text-center"
               >
                 <p className="text-lg font-semibold">
-                  {language === 'ar' ? 'جاهز للمسح' : 'Ready to Scan'}
+                  {language === 'ar' ? 'جاهز للتحقق' : 'Ready to Verify'}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   {language === 'ar' ? 'اضغط على الزر للبدء' : 'Press button to start'}
@@ -309,22 +309,124 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
           {/* Scan button */}
           <Button
             onClick={handleScan}
-            disabled={scanning}
+            disabled={scanning || !user}
             size="lg"
             className="w-full max-w-xs bg-gradient-to-r from-primary to-accent hover:opacity-90 gap-2 h-14"
           >
             {scanning ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                {language === 'ar' ? 'جارٍ المسح...' : 'Scanning...'}
+                {language === 'ar' ? 'جارٍ التحقق...' : 'Verifying...'}
               </>
             ) : (
               <>
-                <Fingerprint className="w-5 h-5" />
-                {language === 'ar' ? 'ابدأ المسح' : 'Start Scan'}
+                <Shield className="w-5 h-5" />
+                {language === 'ar' ? 'ابدأ التحقق من الهوية' : 'Start Verification'}
               </>
             )}
           </Button>
+
+          {/* Verification Details */}
+          {verificationDetails && scanResult === 'success' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="w-full max-w-md"
+            >
+              <Alert className="border-green-500 bg-green-50 dark:bg-green-950/20">
+                <Shield className="h-5 w-5 text-green-600" />
+                <AlertDescription>
+                  <div className="space-y-2 mt-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold">
+                        {language === 'ar' ? 'الطالب:' : 'Student:'}
+                      </span>
+                      <span>{verificationDetails.userName}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold">
+                        {language === 'ar' ? 'الرقم الجامعي:' : 'University ID:'}
+                      </span>
+                      <span className="font-mono">{verificationDetails.universityId}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold">
+                        {language === 'ar' ? 'دقة التطابق:' : 'Match Score:'}
+                      </span>
+                      <span className="text-green-600 font-bold">
+                        {(verificationDetails.biometricScore * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-green-200 dark:border-green-800">
+                      <p className="text-xs font-semibold mb-2">
+                        {language === 'ar' ? 'فحوصات الأمان:' : 'Security Checks:'}
+                      </p>
+                      <div className="space-y-1 text-xs">
+                        {Object.entries(verificationDetails.checks).map(([key, value]) => (
+                          <div key={key} className="flex items-center gap-2">
+                            <CheckCircle className="h-3 w-3 text-green-600" />
+                            <span>{value as string}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </AlertDescription>
+              </Alert>
+            </motion.div>
+          )}
+
+          {/* Error Details */}
+          {verificationDetails && scanResult === 'error' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="w-full max-w-md"
+            >
+              <Alert variant="destructive">
+                <XCircle className="h-5 w-5" />
+                <AlertDescription>
+                  <p className="font-semibold mt-1">
+                    {language === 'ar' ? 'فشل التحقق من الهوية' : 'Identity Verification Failed'}
+                  </p>
+                  <p className="text-sm mt-2">{verificationDetails.message}</p>
+                </AlertDescription>
+              </Alert>
+            </motion.div>
+          )}
+
+          {/* User Info Display */}
+          {user && !scanning && !scanResult && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="w-full max-w-md p-4 rounded-lg border border-border bg-muted/50"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                  <User className="w-5 h-5 text-primary" />
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold text-sm">{user.full_name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {user.role === 'student' && user.university_id 
+                      ? `${language === 'ar' ? 'رقم جامعي:' : 'ID:'} ${user.university_id}`
+                      : user.email
+                    }
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {!user && (
+            <Alert variant="destructive" className="max-w-md">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                {language === 'ar' ? 'يجب تسجيل الدخول أولاً' : 'You must be logged in first'}
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
       </CardContent>
     </Card>

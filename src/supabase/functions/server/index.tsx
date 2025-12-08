@@ -72,19 +72,56 @@ app.post("/make-server-90ad488b/signup", async (c) => {
       return c.json({ error: 'Missing required fields' }, 400);
     }
     
+    // Validate email domain
+    if (!email.endsWith('@kku.edu.sa')) {
+      return c.json({ error: 'Must use university email @kku.edu.sa' }, 400);
+    }
+    
     if (!['student', 'instructor', 'admin', 'supervisor'].includes(role)) {
       return c.json({ error: 'Invalid role' }, 400);
     }
 
     // Validate university_id for students
-    if (role === 'student' && !university_id) {
-      return c.json({ error: 'University ID is required for students' }, 400);
+    if (role === 'student') {
+      if (!university_id) {
+        return c.json({ error: 'University ID is required for students' }, 400);
+      }
+      
+      // Validate university ID format: 9 digits starting with 44
+      const universityIdRegex = /^44\d{7}$/;
+      if (!universityIdRegex.test(university_id)) {
+        return c.json({ error: 'University ID must be 9 digits starting with 44 (e.g., 441234567)' }, 400);
+      }
+      
+      // Check if university ID already exists
+      const existingUsers = await kv.getByPrefix('user:');
+      const duplicateId = existingUsers.find((u: any) => u.university_id === university_id);
+      if (duplicateId) {
+        console.log(`❌ Signup failed: University ID already registered - ${university_id}`);
+        return c.json({ 
+          error: 'University ID already registered',
+          message: 'This University ID is already registered. Please use Sign In instead.',
+          messageAr: 'هذا الرقم الجامعي مسجل مسبقاً. الرجاء استخدام تسجيل الدخول.'
+        }, 400);
+      }
     }
     
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
+    
+    // Check if email already exists
+    const { data: existingUsers } = await supabase.auth.admin.listUsers();
+    const emailExists = existingUsers?.users?.some(u => u.email === email);
+    if (emailExists) {
+      console.log(`❌ Signup failed: Email already registered - ${email}`);
+      return c.json({ 
+        error: 'Email already registered',
+        message: 'This email is already registered. Please use Sign In instead.',
+        messageAr: 'هذا البريد مسجل مسبقاً. الرجاء استخدام تسجيل الدخول.'
+      }, 400);
+    }
     
     // Create user in Supabase Auth
     const { data, error } = await supabase.auth.admin.createUser({
@@ -106,7 +143,8 @@ app.post("/make-server-90ad488b/signup", async (c) => {
       full_name,
       role,
       university_id: university_id || null,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      active_session: null // For session management
     };
     
     await kv.set(`user:${data.user.id}`, userRecord);
@@ -166,6 +204,112 @@ app.get("/make-server-90ad488b/me", async (c) => {
   } catch (error) {
     console.log('Get user error:', error);
     return c.json({ error: 'Internal server error while fetching user' }, 500);
+  }
+});
+
+// Session management - check and register session
+app.post("/make-server-90ad488b/session/register", async (c) => {
+  try {
+    const accessToken = c.req.header('Authorization')?.split(' ')[1];
+    
+    if (!accessToken) {
+      return c.json({ error: 'Missing authorization token' }, 401);
+    }
+    
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+    );
+    
+    const { data, error } = await supabase.auth.getUser(accessToken);
+    
+    if (error || !data.user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = data.user.id;
+    const sessionId = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
+    
+    // Get user record
+    const userRecord = await kv.get(`user:${userId}`);
+    if (!userRecord) {
+      return c.json({ error: 'User not found' }, 404);
+    }
+    
+    // Check if there's an active session
+    if (userRecord.active_session) {
+      const sessionAge = Date.now() - new Date(userRecord.active_session.timestamp).getTime();
+      // If session is less than 30 seconds old, it's likely the same login
+      if (sessionAge < 30000) {
+        return c.json({ 
+          session_id: userRecord.active_session.session_id,
+          message: 'Session already registered'
+        });
+      }
+      
+      // Check if session is still valid (less than 12 hours old)
+      if (sessionAge < 12 * 60 * 60 * 1000) {
+        return c.json({ 
+          error: 'Another session is active. Please logout from other device first.',
+          session_conflict: true
+        }, 409);
+      }
+    }
+    
+    // Register new session
+    userRecord.active_session = {
+      session_id: sessionId,
+      timestamp,
+      access_token: accessToken
+    };
+    
+    await kv.set(`user:${userId}`, userRecord);
+    
+    return c.json({ 
+      session_id: sessionId,
+      message: 'Session registered successfully'
+    });
+  } catch (error) {
+    console.log('Session register error:', error);
+    return c.json({ error: 'Internal server error while registering session' }, 500);
+  }
+});
+
+// Session management - logout
+app.post("/make-server-90ad488b/session/logout", async (c) => {
+  try {
+    const accessToken = c.req.header('Authorization')?.split(' ')[1];
+    
+    if (!accessToken) {
+      return c.json({ error: 'Missing authorization token' }, 401);
+    }
+    
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+    );
+    
+    const { data, error } = await supabase.auth.getUser(accessToken);
+    
+    if (error || !data.user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = data.user.id;
+    
+    // Get user record
+    const userRecord = await kv.get(`user:${userId}`);
+    if (userRecord) {
+      // Clear active session
+      userRecord.active_session = null;
+      await kv.set(`user:${userId}`, userRecord);
+    }
+    
+    return c.json({ message: 'Session cleared successfully' });
+  } catch (error) {
+    console.log('Session logout error:', error);
+    return c.json({ error: 'Internal server error while logging out' }, 500);
   }
 });
 

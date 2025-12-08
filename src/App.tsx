@@ -27,6 +27,7 @@ const ReportsPage = lazy(() => import('./components/ReportsPage').then(m => ({ d
 const TeamPage = lazy(() => import('./components/TeamPage').then(m => ({ default: m.TeamPage })));
 const BackendHealthCheck = lazy(() => import('./components/BackendHealthCheck').then(m => ({ default: m.BackendHealthCheck })));
 const SupabaseSetupGuide = lazy(() => import('./components/SupabaseSetupGuide').then(m => ({ default: m.SupabaseSetupGuide })));
+const DatabaseConnectionTest = lazy(() => import('./components/DatabaseConnectionTest').then(m => ({ default: m.DatabaseConnectionTest })));
 
 type Page = 'landing' | 'login' | 'team' | 'dashboard' | string;
 
@@ -289,6 +290,29 @@ function AppContent() {
           <ErrorBoundary>
             <Suspense fallback={<LoadingFallback />}>
               <BackendHealthCheck />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentPage === 'db-test') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#006747]/5 via-white to-[#006747]/5 py-12">
+        <div className="container mx-auto px-4">
+          <div className="mb-6">
+            <Button
+              variant="outline"
+              onClick={() => setCurrentPage('landing')}
+              className="gap-2"
+            >
+              ← {language === 'ar' ? 'العودة للرئيسية' : 'Back to Home'}
+            </Button>
+          </div>
+          <ErrorBoundary>
+            <Suspense fallback={<LoadingFallback />}>
+              <DatabaseConnectionTest />
             </Suspense>
           </ErrorBoundary>
         </div>
