@@ -47,16 +47,29 @@ export async function apiRequest(
       console.log(`📥 Response status:`, response.status, response.statusText);
       
       const data = await response.json();
-      console.log(`📦 Response data:`, data);
-
+      
       if (!response.ok) {
-        // Don't log 401 errors for /me endpoint (expected when not logged in)
-        if (!(response.status === 401 && endpoint === '/me')) {
+        // Only log errors that are unexpected
+        // Don't log 401 for /me endpoint (expected when not logged in)
+        // Don't log 401 when using anon key (expected when not authenticated)
+        const shouldLog = !(
+          response.status === 401 && (
+            endpoint === '/me' || 
+            !token || 
+            token === publicAnonKey
+          )
+        );
+        
+        if (shouldLog) {
           console.error(`❌ API error for ${endpoint}:`, data);
+        } else {
+          console.log(`ℹ️ Authentication required for ${endpoint} (expected)`);
         }
+        
         throw new Error(data.error || 'API request failed');
       }
-
+      
+      console.log(`✅ Success for ${endpoint}`);
       return data;
     } catch (fetchError: any) {
       clearTimeout(timeoutId);
@@ -66,9 +79,14 @@ export async function apiRequest(
       throw fetchError;
     }
   } catch (err: any) {
-    console.error(`❌ Fetch error for ${endpoint}:`, err);
-    console.error(`❌ Error name:`, err.name);
-    console.error(`❌ Error message:`, err.message);
+    // Only log unexpected errors
+    const isAuthError = err.message?.includes('Unauthorized') || err.message?.includes('401');
+    const isExpectedAuthError = isAuthError && (!token || token === publicAnonKey);
+    
+    if (!isExpectedAuthError) {
+      console.error(`❌ Fetch error for ${endpoint}:`, err.message);
+    }
+    
     throw err;
   }
 }

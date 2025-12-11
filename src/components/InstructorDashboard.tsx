@@ -6,6 +6,7 @@ import { apiRequest } from '../utils/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { DemoDataInitializer } from './DemoDataInitializer';
 import { 
   Users, 
   BookOpen, 
@@ -232,6 +233,17 @@ export function InstructorDashboard() {
           {language === 'ar' ? 'إدارة موادك وجلساتك بكفاءة' : 'Manage your courses and sessions efficiently'}
         </p>
       </div>
+
+      {/* Show Demo Data Initializer if no courses */}
+      {stats.myCourses === 0 && stats.totalSessions === 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+        >
+          <DemoDataInitializer onSuccess={() => window.location.reload()} />
+        </motion.div>
+      )}
 
       {/* Main Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

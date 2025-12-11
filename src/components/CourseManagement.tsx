@@ -34,7 +34,7 @@ interface User {
 }
 
 export function CourseManagement() {
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, token } = useAuth();
   const { language } = useLanguage();
   const [courses, setCourses] = useState<Course[]>([]);
   const [instructors, setInstructors] = useState<User[]>([]);
@@ -55,23 +55,24 @@ export function CourseManagement() {
   const [selectedStudentId, setSelectedStudentId] = useState('');
 
   useEffect(() => {
-    loadCourses();
-    if (currentUser?.role === 'admin') {
-      loadInstructors();
-      loadStudents();
+    if (token) {
+      loadCourses();
+      if (currentUser?.role === 'admin') {
+        loadInstructors();
+        loadStudents();
+      }
     }
-  }, [currentUser]);
+  }, [token, currentUser]);
 
   const loadCourses = async () => {
+    if (!token) return;
+    
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       const data = await apiRequest('/courses', {
-        token: session.access_token,
+        token,
       });
 
-      setCourses(data.courses);
+      setCourses(data.courses || []);
     } catch (error) {
       console.error('Error loading courses:', error);
       setError('فشل تحميل المواد');
@@ -81,12 +82,11 @@ export function CourseManagement() {
   };
 
   const loadInstructors = async () => {
+    if (!token) return;
+    
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       const data = await apiRequest('/users', {
-        token: session.access_token,
+        token,
       });
 
       setInstructors(data.users.filter((u: User) => u.role === 'instructor'));
@@ -96,12 +96,11 @@ export function CourseManagement() {
   };
 
   const loadStudents = async () => {
+    if (!token) return;
+    
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       const data = await apiRequest('/users', {
-        token: session.access_token,
+        token,
       });
 
       setStudents(data.users.filter((u: User) => u.role === 'student'));
@@ -114,10 +113,13 @@ export function CourseManagement() {
     e.preventDefault();
     setError('');
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+    if (!token) {
+      setError('غير مصرح');
+      return;
+    }
 
+    try {
+      // For instructors, automatically assign themselves
       const instructorId = currentUser?.role === 'instructor' 
         ? currentUser.id 
         : (newCourseInstructor || null);
@@ -129,32 +131,33 @@ export function CourseManagement() {
           course_code: newCourseCode,
           instructor_id: instructorId,
         },
-        token: session.access_token,
+        token,
       });
 
-      setIsDialogOpen(false);
+      // Reset form
       setNewCourseName('');
       setNewCourseCode('');
       setNewCourseInstructor('');
-      
+      setIsDialogOpen(false);
+
+      // Reload courses
       await loadCourses();
-    } catch (err: any) {
-      setError(err.message || (language === 'ar' ? 'فشل إضافة المادة' : 'Failed to add course'));
+    } catch (error: any) {
+      setError(error.message || 'فشل إضافة المادة');
     }
   };
 
   const handleDeleteCourse = async (courseId: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذه المادة؟')) {
+    if (!token) return;
+    
+    if (!confirm(language === 'ar' ? 'هل أنت متأكد من حذف هذه المادة؟' : 'Are you sure you want to delete this course?')) {
       return;
     }
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       await apiRequest(`/courses/${courseId}`, {
         method: 'DELETE',
-        token: session.access_token,
+        token,
       });
 
       await loadCourses();
@@ -168,17 +171,19 @@ export function CourseManagement() {
     e.preventDefault();
     setError('');
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+    if (!token) {
+      setError('غير مصرح');
+      return;
+    }
 
+    try {
       await apiRequest('/enrollments', {
         method: 'POST',
         body: {
           student_id: selectedStudentId,
           course_id: selectedCourseId,
         },
-        token: session.access_token,
+        token,
       });
 
       // Success!

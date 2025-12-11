@@ -26,8 +26,8 @@ import {
 import { Alert, AlertDescription } from './ui/alert';
 import { Plus, Copy, Check, AlertCircle, Timer, XCircle, BookOpen, ArrowRight, Video, ClipboardCheck, Trash2 } from 'lucide-react';
 import { apiRequest } from '../utils/api';
-import { supabase } from '../utils/supabaseClient';
 import { useLanguage } from './LanguageContext';
+import { useAuth } from './AuthContext';
 import { LiveStreamHost } from './LiveStreamHost';
 
 interface Session {
@@ -58,6 +58,7 @@ interface SessionManagementProps {
 
 export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
   const { language } = useLanguage();
+  const { token } = useAuth();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,8 +94,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
   const loadCourses = async () => {
     console.log('🔄 [SessionManagement] Loading courses...');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      if (!token) {
         console.error('❌ [SessionManagement] No auth token');
         setLoading(false);
         return;
@@ -102,7 +102,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
 
       console.log('📡 [SessionManagement] Fetching courses...');
       const data = await apiRequest('/courses', {
-        token: session.access_token,
+        token: token,
       });
 
       console.log('✅ [SessionManagement] Courses loaded:', data.courses.length);
@@ -119,8 +119,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     console.log('📚 [SessionManagement] Courses to load from:', courses.length);
     
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      if (!token) {
         console.error('❌ [SessionManagement] No auth token');
         setLoading(false);
         return;
@@ -142,7 +141,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
           console.log(`  📖 Loading sessions for course: ${course.course_name} (${course.id})`);
           // FIX: Use the correct endpoint /sessions/:courseId instead of /courses/:courseId
           const data = await apiRequest(`/sessions/${course.id}`, {
-            token: session.access_token,
+            token: token,
           });
           console.log(`  ✅ Found ${data.sessions.length} sessions for ${course.course_name}`);
           allSessions.push(...data.sessions);
@@ -169,8 +168,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     setError('');
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      if (!token) return;
 
       await apiRequest('/sessions', {
         method: 'POST',
@@ -181,7 +179,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
           title: newSessionTitle,
           description: newSessionDescription,
         },
-        token: session.access_token,
+        token: token,
       });
 
       setIsDialogOpen(false);
@@ -203,12 +201,11 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     }
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      if (!token) return;
 
       await apiRequest(`/sessions/${sessionId}/deactivate`, {
         method: 'POST',
-        token: session.access_token,
+        token: token,
       });
 
       await loadAllSessions();
@@ -222,12 +219,11 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     if (!sessionToDelete) return;
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      if (!token) return;
 
       await apiRequest(`/sessions/${sessionToDelete.id}`, {
         method: 'DELETE',
-        token: session.access_token,
+        token: token,
       });
 
       setIsDeleteDialogOpen(false);
@@ -251,8 +247,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
       setError('');
       console.log('🎬 Starting live stream for session:', session.id);
       
-      const { data: { session: authSession } } = await supabase.auth.getSession();
-      if (!authSession?.access_token) {
+      if (!token) {
         setError('غير مصرح. يرجى تسجيل الدخول مرة أخرى.');
         return;
       }
@@ -260,7 +255,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
       // Call the backend to start the live session
       const result = await apiRequest(`/live-sessions/${session.id}/start`, {
         method: 'POST',
-        token: authSession.access_token,
+        token: token,
       });
 
       console.log('✅ Live session started:', result);
@@ -285,12 +280,11 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
 
       console.log('🛑 Stopping live stream for session:', activeStreamSession.id);
       
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      if (!token) return;
 
       await apiRequest(`/live-sessions/${activeStreamSession.id}/end`, {
         method: 'POST',
-        token: session.access_token,
+        token: token,
       });
 
       console.log('✅ Live session ended');

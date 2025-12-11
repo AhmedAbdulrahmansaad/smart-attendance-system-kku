@@ -1,5 +1,3 @@
-import React from 'react';
-import { motion } from 'motion/react';
 import { useLanguage } from './LanguageContext';
 import { useTheme } from './ThemeContext';
 import { useTranslation } from '../utils/i18n';
@@ -24,8 +22,10 @@ import {
   Target,
   Mail
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../utils/supabaseClient';
+import { apiRequest } from '../utils/api';
+import { projectId, publicAnonKey } from '../utils/supabase/info';
 
 interface LandingPageProps {
   onNavigate: (page: 'login' | 'team' | 'health-check') => void;
@@ -36,50 +36,67 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
   const { theme, toggleTheme } = useTheme();
   const t = useTranslation(language);
 
-  // جلب الإحصائيات الحقيقية من قاعدة البيانات
-  const { data: realStats } = useQuery({
+  // جلب الإحصائيات الحقيقية من قاعدة البيانات عبر API
+  const { data: realStats, error: statsError, isLoading } = useQuery({
     queryKey: ['landing-stats'],
     queryFn: async () => {
-      // عدد الطلاب النشطين
-      const { count: studentsCount } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('role', 'student');
-
-      // عدد أعضاء هيئة التدريس
-      const { count: instructorsCount } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('role', 'instructor');
-
-      // عدد المقررات
-      const { count: coursesCount } = await supabase
-        .from('courses')
-        .select('*', { count: 'exact', head: true });
-
-      // حساب نسبة الحضور
-      const { count: totalRecords } = await supabase
-        .from('attendance_records')
-        .select('*', { count: 'exact', head: true });
-
-      const { count: presentRecords } = await supabase
-        .from('attendance_records')
-        .select('*', { count: 'exact', head: true })
-        .in('attendance_status', ['present', 'late']);
-
-      const attendanceRate = totalRecords && totalRecords > 0
-        ? Math.round((presentRecords || 0) / totalRecords * 100 * 10) / 10
-        : 99.8;
-
-      return {
-        studentsCount: studentsCount || 0,
-        instructorsCount: instructorsCount || 0,
-        coursesCount: coursesCount || 0,
-        attendanceRate
-      };
+      try {
+        console.log('🔍 Fetching landing stats from API...');
+        console.log('📍 URL:', `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/stats/public`);
+        
+        // Call the public stats API endpoint
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/stats/public`,
+          {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${publicAnonKey}`,
+            },
+          }
+        );
+        
+        console.log('📡 Response status:', response.status);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ API Error Response:', errorText);
+          console.warn('⚠️ Edge Functions might not be deployed yet. Using fallback data.');
+          // Return fallback data instead of throwing
+          return {
+            studentsCount: 0,
+            instructorsCount: 0,
+            coursesCount: 0,
+            attendanceRate: 99.8
+          };
+        }
+        
+        const data = await response.json();
+        
+        console.log('✅ Landing page stats from database:', data);
+        
+        return {
+          studentsCount: data.stats?.studentsCount || 0,
+          instructorsCount: data.stats?.instructorsCount || 0,
+          coursesCount: data.stats?.coursesCount || 0,
+          attendanceRate: data.stats?.attendanceRate || 99.8
+        };
+      } catch (error) {
+        console.error('❌ Error loading landing stats:', error);
+        console.warn('⚠️ Using fallback stats. Please deploy Edge Functions to see real data.');
+        console.warn('📝 Run: supabase functions deploy server');
+        // Return fallback data silently
+        return {
+          studentsCount: 0,
+          instructorsCount: 0,
+          coursesCount: 0,
+          attendanceRate: 99.8
+        };
+      }
     },
-    refetchInterval: 30000, // تحديث كل 30 ثانية
-    staleTime: 20000
+    enabled: true,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: false, // Don't retry on failure
   });
 
   const toggleLanguage = () => {
@@ -127,28 +144,28 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
       labelAr: 'طالب نشط', 
       labelEn: 'Active Students', 
       icon: Users,
-      loading: !realStats 
+      loading: isLoading 
     },
     { 
       value: realStats?.instructorsCount.toString() || '0', 
       labelAr: 'عضو هيئة تدريس', 
       labelEn: 'Faculty Members', 
       icon: Award,
-      loading: !realStats 
+      loading: isLoading 
     },
     { 
       value: realStats?.coursesCount.toString() || '0', 
       labelAr: 'مقرر دراسي', 
       labelEn: 'Courses', 
       icon: BookOpen,
-      loading: !realStats 
+      loading: isLoading 
     },
     { 
       value: `${realStats?.attendanceRate || '99.8'}%`, 
       labelAr: 'دقة النظام', 
       labelEn: 'System Accuracy', 
       icon: Target,
-      loading: !realStats 
+      loading: isLoading 
     }
   ];
 
@@ -176,7 +193,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
                 {language === 'ar' ? 'نظام الحضور الذكي' : 'Smart Attendance System'}
               </h1>
               <p className="text-xs text-muted-foreground font-semibold">
-                {language === 'ar' ? 'جامعة الملك خالد' : 'King Khalid University'}
+                {language === 'ar' ? 'جامعة الملك خلد' : 'King Khalid University'}
               </p>
             </div>
           </motion.div>

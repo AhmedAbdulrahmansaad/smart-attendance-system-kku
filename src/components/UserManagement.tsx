@@ -1,56 +1,43 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from './ui/dialog';
-import { Alert, AlertDescription } from './ui/alert';
-import { UserPlus, Trash2, Search, AlertCircle } from 'lucide-react';
+import { Badge } from './ui/badge';
+import { useLanguage } from './LanguageContext';
+import { useAuth } from './AuthContext';
 import { apiRequest } from '../utils/api';
-import { supabase } from '../utils/supabaseClient';
-
-interface User {
-  id: string;
-  email: string;
-  full_name: string;
-  role: string;
-  created_at: string;
-}
+import { Users, Trash2, UserPlus, Search, AlertCircle } from 'lucide-react';
 
 export function UserManagement() {
-  const [users, setUsers] = useState<User[]>([]);
+  const { language } = useLanguage();
+  const { token } = useAuth();
+  const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [error, setError] = useState('');
-
-  // New user form state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showAddForm, setShowAddForm] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
-  const [newUserFullName, setNewUserFullName] = useState('');
+  const [newUserName, setNewUserName] = useState('');
   const [newUserRole, setNewUserRole] = useState('student');
+  const [newUserUniversityId, setNewUserUniversityId] = useState('');
 
   useEffect(() => {
-    loadUsers();
-  }, []);
+    if (token) {
+      loadUsers();
+    }
+  }, [token]);
 
   const loadUsers = async () => {
+    if (!token) return;
+    
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       const data = await apiRequest('/users', {
-        token: session.access_token,
+        token,
       });
 
-      setUsers(data.users);
+      setUsers(data.users || []);
     } catch (error) {
       console.error('Error loading users:', error);
       setError('فشل تحميل المستخدمين');
@@ -63,45 +50,50 @@ export function UserManagement() {
     e.preventDefault();
     setError('');
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+    if (!token) {
+      setError('غير مصرح');
+      return;
+    }
 
+    try {
       await apiRequest('/signup', {
         method: 'POST',
         body: {
           email: newUserEmail,
           password: newUserPassword,
-          full_name: newUserFullName,
+          full_name: newUserName,
           role: newUserRole,
+          university_id: newUserRole === 'student' ? newUserUniversityId : undefined,
         },
-        token: session.access_token,
+        token,
       });
 
-      setIsDialogOpen(false);
+      // Reset form
       setNewUserEmail('');
       setNewUserPassword('');
-      setNewUserFullName('');
+      setNewUserName('');
       setNewUserRole('student');
-      
+      setNewUserUniversityId('');
+      setShowAddForm(false);
+
+      // Reload users
       await loadUsers();
-    } catch (err: any) {
-      setError(err.message || 'فشل إضافة المستخدم');
+    } catch (error: any) {
+      setError(error.message || 'فشل إضافة المستخدم');
     }
   };
 
   const handleDeleteUser = async (userId: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذا المستخدم؟')) {
+    if (!token) return;
+    
+    if (!confirm(language === 'ar' ? 'هل أنت متأكد من حذف هذا المستخدم؟' : 'Are you sure you want to delete this user?')) {
       return;
     }
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       await apiRequest(`/users/${userId}`, {
         method: 'DELETE',
-        token: session.access_token,
+        token,
       });
 
       await loadUsers();
@@ -111,12 +103,6 @@ export function UserManagement() {
     }
   };
 
-  const filteredUsers = users.filter(
-    (user) =>
-      user.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
       case 'admin':
@@ -125,6 +111,8 @@ export function UserManagement() {
         return 'bg-blue-100 text-blue-700';
       case 'student':
         return 'bg-green-100 text-green-700';
+      case 'supervisor':
+        return 'bg-purple-100 text-purple-700';
       default:
         return 'bg-gray-100 text-gray-700';
     }
@@ -133,133 +121,170 @@ export function UserManagement() {
   const getRoleLabel = (role: string) => {
     switch (role) {
       case 'admin':
-        return 'مدير';
+        return language === 'ar' ? 'مدير' : 'Admin';
       case 'instructor':
-        return 'مدرس';
+        return language === 'ar' ? 'مدرس' : 'Instructor';
       case 'student':
-        return 'طالب';
+        return language === 'ar' ? 'طالب' : 'Student';
+      case 'supervisor':
+        return language === 'ar' ? 'مشرف' : 'Supervisor';
       default:
         return role;
     }
   };
+
+  const filteredUsers = users.filter(user => 
+    user.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    user.email?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">جارٍ التحميل...</p>
+          <p className="mt-4 text-muted-foreground">
+            {language === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1>إدارة المستخدمين</h1>
-          <p className="text-muted-foreground">إضافة وحذف وإدارة المستخدمين</p>
+          <h1 className="text-3xl font-bold text-[#006747]">
+            {language === 'ar' ? 'إدارة المستخدمين' : 'User Management'}
+          </h1>
+          <p className="text-muted-foreground">
+            {language === 'ar' ? 'إضافة وحذف وإدارة المستخدمين' : 'Add, delete, and manage users'}
+          </p>
         </div>
 
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <UserPlus className="w-4 h-4 ml-2" />
-              إضافة مستخدم
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>إضافة مستخدم جديد</DialogTitle>
-              <DialogDescription>
-                املأ البيانات التالية لإنشاء مستخدم جديد
-              </DialogDescription>
-            </DialogHeader>
+        <Button onClick={() => setShowAddForm(!showAddForm)} className="bg-[#006747] hover:bg-[#005438]">
+          <UserPlus className={`w-4 h-4 ${language === 'ar' ? 'ml-2' : 'mr-2'}`} />
+          {language === 'ar' ? 'إضافة مستخدم' : 'Add User'}
+        </Button>
+      </div>
 
+      {/* Add User Form */}
+      {showAddForm && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{language === 'ar' ? 'إضافة مستخدم جديد' : 'Add New User'}</CardTitle>
+            <CardDescription>
+              {language === 'ar' ? 'املأ البيانات التالية لإنشاء مستخدم جديد' : 'Fill in the details to create a new user'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
             <form onSubmit={handleAddUser} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="full-name">الاسم الكامل</Label>
-                <Input
-                  id="full-name"
-                  value={newUserFullName}
-                  onChange={(e) => setNewUserFullName(e.target.value)}
-                  placeholder="أحمد محمد"
-                  required
-                />
-              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="full-name">{language === 'ar' ? 'الاسم الكامل' : 'Full Name'}</Label>
+                  <Input
+                    id="full-name"
+                    value={newUserName}
+                    onChange={(e) => setNewUserName(e.target.value)}
+                    placeholder={language === 'ar' ? 'أحمد محمد' : 'Ahmed Mohammed'}
+                    required
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="email">البريد الإلكتروني</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={newUserEmail}
-                  onChange={(e) => setNewUserEmail(e.target.value)}
-                  placeholder="user@kku.edu.sa"
-                  required
-                />
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="email">{language === 'ar' ? 'البريد الإلكتروني' : 'Email'}</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                    placeholder="user@kku.edu.sa"
+                    required
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="password">كلمة المرور</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={newUserPassword}
-                  onChange={(e) => setNewUserPassword(e.target.value)}
-                  placeholder="******"
-                  required
-                  minLength={6}
-                />
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="password">{language === 'ar' ? 'كلمة المرور' : 'Password'}</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    placeholder="******"
+                    required
+                    minLength={6}
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="role">الدور</Label>
-                <select
-                  id="role"
-                  className="w-full h-10 px-3 rounded-md border border-input bg-background"
-                  value={newUserRole}
-                  onChange={(e) => setNewUserRole(e.target.value)}
-                >
-                  <option value="student">طالب</option>
-                  <option value="instructor">مدرس</option>
-                  <option value="admin">مدير</option>
-                </select>
+                <div className="space-y-2">
+                  <Label htmlFor="role">{language === 'ar' ? 'الدور' : 'Role'}</Label>
+                  <select
+                    id="role"
+                    className="w-full h-10 px-3 rounded-md border border-input bg-background"
+                    value={newUserRole}
+                    onChange={(e) => setNewUserRole(e.target.value)}
+                  >
+                    <option value="student">{language === 'ar' ? 'طالب' : 'Student'}</option>
+                    <option value="instructor">{language === 'ar' ? 'مدرس' : 'Instructor'}</option>
+                    <option value="supervisor">{language === 'ar' ? 'مشرف' : 'Supervisor'}</option>
+                    <option value="admin">{language === 'ar' ? 'مدير' : 'Admin'}</option>
+                  </select>
+                </div>
+
+                {newUserRole === 'student' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="university-id">{language === 'ar' ? 'الرقم الجامعي' : 'University ID'}</Label>
+                    <Input
+                      id="university-id"
+                      value={newUserUniversityId}
+                      onChange={(e) => setNewUserUniversityId(e.target.value)}
+                      placeholder="441234567"
+                      pattern="44[0-9]{7}"
+                      required={newUserRole === 'student'}
+                    />
+                  </div>
+                )}
               </div>
 
               {error && (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
+                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                  <AlertCircle className="w-4 h-4 text-red-600" />
+                  <p className="text-sm text-red-600">{error}</p>
+                </div>
               )}
 
               <div className="flex gap-2">
-                <Button type="submit" className="flex-1">إضافة</Button>
+                <Button type="submit" className="flex-1 bg-[#006747] hover:bg-[#005438]">
+                  {language === 'ar' ? 'إضافة' : 'Add'}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setIsDialogOpen(false)}
+                  onClick={() => {
+                    setShowAddForm(false);
+                    setError('');
+                  }}
                 >
-                  إلغاء
+                  {language === 'ar' ? 'إلغاء' : 'Cancel'}
                 </Button>
               </div>
             </form>
-          </DialogContent>
-        </Dialog>
-      </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Search */}
       <Card>
         <CardContent className="p-4">
           <div className="relative">
-            <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+            <Search className={`absolute ${language === 'ar' ? 'right-3' : 'left-3'} top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4`} />
             <Input
-              placeholder="البحث عن مستخدم..."
+              placeholder={language === 'ar' ? 'البحث عن مستخدم...' : 'Search for a user...'}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pr-10"
+              className={language === 'ar' ? 'pr-10' : 'pl-10'}
             />
           </div>
         </CardContent>
@@ -268,26 +293,40 @@ export function UserManagement() {
       {/* Users Table */}
       <Card>
         <CardHeader>
-          <CardTitle>المستخدمون ({filteredUsers.length})</CardTitle>
-          <CardDescription>قائمة جميع المستخدمين في النظام</CardDescription>
+          <CardTitle>
+            {language === 'ar' ? `المستخدمون (${filteredUsers.length})` : `Users (${filteredUsers.length})`}
+          </CardTitle>
+          <CardDescription>
+            {language === 'ar' ? 'قائمة جميع المستخدمين في النظام' : 'List of all users in the system'}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b">
-                  <th className="text-right p-3">الاسم</th>
-                  <th className="text-right p-3">البريد الإلكتروني</th>
-                  <th className="text-right p-3">الدور</th>
-                  <th className="text-right p-3">تاريخ الإنشاء</th>
-                  <th className="text-right p-3">الإجراءات</th>
+                  <th className={`${language === 'ar' ? 'text-right' : 'text-left'} p-3`}>
+                    {language === 'ar' ? 'الاسم' : 'Name'}
+                  </th>
+                  <th className={`${language === 'ar' ? 'text-right' : 'text-left'} p-3`}>
+                    {language === 'ar' ? 'البريد الإلكتروني' : 'Email'}
+                  </th>
+                  <th className={`${language === 'ar' ? 'text-right' : 'text-left'} p-3`}>
+                    {language === 'ar' ? 'الدور' : 'Role'}
+                  </th>
+                  <th className={`${language === 'ar' ? 'text-right' : 'text-left'} p-3`}>
+                    {language === 'ar' ? 'تاريخ الإنشاء' : 'Created At'}
+                  </th>
+                  <th className={`${language === 'ar' ? 'text-right' : 'text-left'} p-3`}>
+                    {language === 'ar' ? 'الإجراءات' : 'Actions'}
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {filteredUsers.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="text-center p-8 text-muted-foreground">
-                      لا توجد نتائج
+                      {language === 'ar' ? 'لا توجد نتائج' : 'No results found'}
                     </td>
                   </tr>
                 ) : (
@@ -301,7 +340,7 @@ export function UserManagement() {
                         </span>
                       </td>
                       <td className="p-3 text-sm text-muted-foreground">
-                        {new Date(user.created_at).toLocaleDateString('ar-SA')}
+                        {new Date(user.created_at).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US')}
                       </td>
                       <td className="p-3">
                         <Button

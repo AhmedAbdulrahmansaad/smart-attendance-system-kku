@@ -14,7 +14,6 @@ import {
 import { Alert, AlertDescription } from './ui/alert';
 import { Calendar, Plus, Trash2, AlertCircle, Clock } from 'lucide-react';
 import { apiRequest } from '../utils/api';
-import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthContext';
 
 interface Schedule {
@@ -38,7 +37,7 @@ interface Course {
 }
 
 export function ScheduleManagement() {
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, token } = useAuth();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,20 +62,21 @@ export function ScheduleManagement() {
   ];
 
   useEffect(() => {
-    loadSchedules();
-    loadCourses();
-  }, []);
+    if (token) {
+      loadSchedules();
+      loadCourses();
+    }
+  }, [token]);
 
   const loadSchedules = async () => {
+    if (!token) return;
+    
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       const data = await apiRequest('/schedules', {
-        token: session.access_token,
+        token,
       });
 
-      setSchedules(data.schedules);
+      setSchedules(data.schedules || []);
     } catch (error) {
       console.error('Error loading schedules:', error);
       setError('فشل تحميل الجداول');
@@ -86,15 +86,14 @@ export function ScheduleManagement() {
   };
 
   const loadCourses = async () => {
+    if (!token) return;
+    
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       const data = await apiRequest('/courses', {
-        token: session.access_token,
+        token,
       });
 
-      setCourses(data.courses);
+      setCourses(data.courses || []);
     } catch (error) {
       console.error('Error loading courses:', error);
     }
@@ -104,10 +103,12 @@ export function ScheduleManagement() {
     e.preventDefault();
     setError('');
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+    if (!token) {
+      setError('غير مصرح');
+      return;
+    }
 
+    try {
       await apiRequest('/schedules', {
         method: 'POST',
         body: {
@@ -117,7 +118,7 @@ export function ScheduleManagement() {
           end_time: newScheduleEndTime,
           location: newScheduleLocation,
         },
-        token: session.access_token,
+        token,
       });
 
       setIsDialogOpen(false);
@@ -134,17 +135,16 @@ export function ScheduleManagement() {
   };
 
   const handleDeleteSchedule = async (scheduleId: string) => {
+    if (!token) return;
+    
     if (!confirm('هل أنت متأكد من حذف هذا الجدول؟')) {
       return;
     }
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       await apiRequest(`/schedules/${scheduleId}`, {
         method: 'DELETE',
-        token: session.access_token,
+        token,
       });
 
       await loadSchedules();

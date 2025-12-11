@@ -5,9 +5,10 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Alert, AlertDescription } from './ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { ClipboardCheck, CheckCircle, AlertCircle, Fingerprint, QrCode, Video, Users, Clock, RefreshCw } from 'lucide-react';
+import { ClipboardCheck, CheckCircle, AlertCircle, Fingerprint, QrCode, Video, Users, Clock, RefreshCw, Radio } from 'lucide-react';
 import { FingerprintAttendance } from './FingerprintAttendance';
 import { LiveStreamViewer } from './LiveStreamViewer';
+import { NFCAttendance } from './NFCAttendance';
 import { useAuth } from './AuthContext';
 import { apiRequest } from '../utils/api';
 import { useLanguage } from './LanguageContext';
@@ -100,6 +101,16 @@ export function StudentAttendance() {
       setError('');
     } else {
       setError(language === 'ar' ? 'فشل التعرف على البصمة' : 'Fingerprint recognition failed');
+      setSuccess(false);
+    }
+  };
+
+  const handleNFCSwipe = async (swipeSuccess: boolean) => {
+    if (swipeSuccess) {
+      setSuccess(true);
+      setError('');
+    } else {
+      setError(language === 'ar' ? 'فشل قراءة البطاقة' : 'NFC card reading failed');
       setSuccess(false);
     }
   };
@@ -219,7 +230,7 @@ export function StudentAttendance() {
       </div>
 
       <Tabs defaultValue="fingerprint" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 h-14 glass border border-border">
+        <TabsList className="grid w-full grid-cols-3 h-14 glass border border-border">
           <TabsTrigger 
             value="fingerprint" 
             className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-primary data-[state=active]:to-accent data-[state=active]:text-white gap-2 font-bold"
@@ -233,6 +244,13 @@ export function StudentAttendance() {
           >
             <QrCode className="w-5 h-5" />
             {language === 'ar' ? 'الكود' : 'Code'}
+          </TabsTrigger>
+          <TabsTrigger 
+            value="nfc" 
+            className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-primary data-[state=active]:to-accent data-[state=active]:text-white gap-2 font-bold"
+          >
+            <Radio className="w-5 h-5" />
+            {language === 'ar' ? 'NFC' : 'NFC'}
           </TabsTrigger>
         </TabsList>
 
@@ -306,6 +324,10 @@ export function StudentAttendance() {
               </form>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="nfc" className="mt-6">
+          <NFCAttendance onSuccess={() => setSuccess(true)} />
         </TabsContent>
       </Tabs>
 

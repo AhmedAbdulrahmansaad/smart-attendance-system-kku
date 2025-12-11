@@ -39,6 +39,28 @@ export function LoginPage({ onBack }: LoginPageProps) {
   const [signUpUniversityId, setSignUpUniversityId] = useState('');
   const [signUpRole, setSignUpRole] = useState<UserRole>('student');
 
+  // Handle email input with auto-append @kku.edu.sa
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    
+    // Remove any existing @kku.edu.sa
+    let cleanValue = value.replace('@kku.edu.sa', '');
+    
+    // If user types @ symbol, auto-complete
+    if (cleanValue.includes('@')) {
+      cleanValue = cleanValue.split('@')[0] + '@kku.edu.sa';
+    }
+    
+    setSignUpEmail(cleanValue);
+  };
+
+  // On blur, ensure @kku.edu.sa is appended
+  const handleEmailBlur = () => {
+    if (signUpEmail && !signUpEmail.includes('@')) {
+      setSignUpEmail(signUpEmail + '@kku.edu.sa');
+    }
+  };
+
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -79,7 +101,7 @@ export function LoginPage({ onBack }: LoginPageProps) {
         }
 
         // Validate university ID format: 9 digits starting with 44
-        const universityIdRegex = /^44\\d{7}$/;
+        const universityIdRegex = /^44\d{7}$/;
         if (!universityIdRegex.test(signUpUniversityId)) {
           setError(language === 'ar' 
             ? 'الرقم الجامعي يجب أن يكون 9 أرقام ويبدأ بـ 44 (مثال: 441234567)' 
@@ -94,6 +116,16 @@ export function LoginPage({ onBack }: LoginPageProps) {
         setError(language === 'ar' 
           ? 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' 
           : 'Password must be at least 6 characters');
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate password strength - must contain uppercase, lowercase, number, and special character
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+      if (!passwordRegex.test(signUpPassword)) {
+        setError(language === 'ar' 
+          ? 'كلمة المرور يجب أن تحتوي على 8 أحرف على الأقل، حرف كبير، حرف صغير، رقم، ورمز خاص (@$!%*?&)' 
+          : 'Password must be at least 8 characters with uppercase, lowercase, number, and special character (@$!%*?&)');
         setIsLoading(false);
         return;
       }
@@ -367,7 +399,8 @@ export function LoginPage({ onBack }: LoginPageProps) {
                             type="email"
                             placeholder="user@kku.edu.sa"
                             value={signUpEmail}
-                            onChange={(e) => setSignUpEmail(e.target.value)}
+                            onChange={handleEmailChange}
+                            onBlur={handleEmailBlur}
                             required
                             disabled={isLoading}
                             className="h-14 text-base border-2 focus:border-primary"

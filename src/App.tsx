@@ -17,6 +17,7 @@ import { Toaster } from 'sonner@2.0.3';
 const AdminDashboard = lazy(() => import('./components/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
 const InstructorDashboard = lazy(() => import('./components/InstructorDashboard').then(m => ({ default: m.InstructorDashboard })));
 const StudentDashboard = lazy(() => import('./components/StudentDashboard').then(m => ({ default: m.StudentDashboard })));
+const SupervisorDashboard = lazy(() => import('./components/SupervisorDashboard').then(m => ({ default: m.SupervisorDashboard })));
 const UserManagement = lazy(() => import('./components/UserManagement').then(m => ({ default: m.UserManagement })));
 const CourseManagement = lazy(() => import('./components/CourseManagement').then(m => ({ default: m.CourseManagement })));
 const ScheduleManagement = lazy(() => import('./components/ScheduleManagement').then(m => ({ default: m.ScheduleManagement })));
@@ -226,7 +227,7 @@ function AppContent() {
             return (
               <ErrorBoundary>
                 <Suspense fallback={<LoadingFallback />}>
-                  <ReportsPage />
+                  <SupervisorDashboard />
                 </Suspense>
               </ErrorBoundary>
             );
@@ -242,7 +243,7 @@ function AppContent() {
             return (
               <ErrorBoundary>
                 <Suspense fallback={<LoadingFallback />}>
-                  <ReportsPage />
+                  <SupervisorDashboard />
                 </Suspense>
               </ErrorBoundary>
             );

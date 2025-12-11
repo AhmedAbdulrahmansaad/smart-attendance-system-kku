@@ -2,8 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'motion/react';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
-import { apiRequest } from '../utils/api';
-import { useCache } from '../utils/useCache';
+import { useAdminDashboardStats } from '../hooks/useAdminData';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -23,99 +22,26 @@ import {
   AlertCircle
 } from 'lucide-react';
 
-interface DashboardStats {
-  totalUsers: number;
-  totalStudents: number;
-  totalInstructors: number;
-  totalCourses: number;
-  totalSessions: number;
-  activeSessionsToday: number;
-  attendanceRate: number;
-  presentToday: number;
-  absentToday: number;
-}
-
 export function AdminDashboard() {
   const { language } = useLanguage();
   const { token } = useAuth();
-  const [stats, setStats] = useState<DashboardStats>({
+  
+  // استخدام الـ hook الشامل لجلب جميع البيانات
+  const { data, isLoading, isError, error } = useAdminDashboardStats({ token });
+  
+  const stats = data?.stats || {
     totalUsers: 0,
     totalStudents: 0,
     totalInstructors: 0,
     totalCourses: 0,
     totalSessions: 0,
     activeSessionsToday: 0,
-    attendanceRate: 0,
+    attendanceRateToday: 0,
     presentToday: 0,
     absentToday: 0,
-  });
-  const [loading, setLoading] = useState(true);
-  const [recentActivity, setRecentActivity] = useState<any[]>([]);
-
-  useEffect(() => {
-    loadDashboardData();
-  }, [token]);
-
-  const loadDashboardData = async () => {
-    if (!token) return;
-    
-    try {
-      setLoading(true);
-      
-      // Load all data in parallel
-      const [usersData, coursesData, sessionsData, attendanceData] = await Promise.all([
-        apiRequest('/users', { token }).catch(() => ({ users: [] })),
-        apiRequest('/courses', { token }).catch(() => ({ courses: [] })),
-        apiRequest('/sessions', { token }).catch(() => ({ sessions: [] })),
-        apiRequest('/attendance/today', { token }).catch(() => ({ attendance: [] })),
-      ]);
-
-      const users = usersData.users || [];
-      const courses = coursesData.courses || [];
-      const sessions = sessionsData.sessions || [];
-      const todayAttendance = attendanceData.attendance || [];
-
-      // Calculate stats
-      const students = users.filter((u: any) => u.role === 'student');
-      const instructors = users.filter((u: any) => u.role === 'instructor');
-      
-      const today = new Date().toISOString().split('T')[0];
-      const todaySessions = sessions.filter((s: any) => s.date?.startsWith(today));
-      
-      const presentCount = todayAttendance.filter((a: any) => a.status === 'present').length;
-      const absentCount = todayAttendance.filter((a: any) => a.status === 'absent').length;
-      const totalAttendance = presentCount + absentCount;
-      const attendanceRate = totalAttendance > 0 ? (presentCount / totalAttendance) * 100 : 0;
-
-      setStats({
-        totalUsers: users.length,
-        totalStudents: students.length,
-        totalInstructors: instructors.length,
-        totalCourses: courses.length,
-        totalSessions: sessions.length,
-        activeSessionsToday: todaySessions.length,
-        attendanceRate: Math.round(attendanceRate),
-        presentToday: presentCount,
-        absentToday: absentCount,
-      });
-
-      // Set recent activity
-      const activity = [
-        ...sessions.slice(0, 5).map((s: any) => ({
-          type: 'session',
-          title: language === 'ar' ? 'جلسة جديدة' : 'New Session',
-          description: s.course_name || s.course_code,
-          time: s.created_at,
-        })),
-      ];
-      setRecentActivity(activity);
-
-    } catch (error) {
-      console.error('Error loading dashboard:', error);
-    } finally {
-      setLoading(false);
-    }
   };
+  
+  const recentActivity = data?.recentActivity || [];
 
   const statsCards = [
     {
@@ -163,7 +89,7 @@ export function AdminDashboard() {
     },
     {
       title: language === 'ar' ? 'نسبة الحضور' : 'Attendance Rate',
-      value: `${stats.attendanceRate}%`,
+      value: `${stats.attendanceRateToday}%`,
       icon: TrendingUp,
       color: 'from-green-500 to-teal-500',
       bgColor: 'bg-green-500/10',
@@ -187,7 +113,7 @@ export function AdminDashboard() {
     },
   ];
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-center">
@@ -335,16 +261,26 @@ export function AdminDashboard() {
             <CardContent>
               {recentActivity.length > 0 ? (
                 <div className="space-y-4">
-                  {recentActivity.map((activity, index) => (
+                  {recentActivity.map((activity: any, index: number) => (
                     <div key={index} className="flex items-start gap-3 p-3 rounded-lg hover:bg-accent/50 transition-colors">
                       <div className="w-2 h-2 rounded-full bg-primary mt-2"></div>
                       <div className="flex-1">
                         <p className="font-semibold">{activity.title}</p>
-                        <p className="text-sm text-muted-foreground">{activity.description}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {activity.course_name} {activity.course_code && `(${activity.course_code})`}
+                        </p>
                         <p className="text-xs text-muted-foreground mt-1">
-                          {new Date(activity.time).toLocaleString(language === 'ar' ? 'ar-SA' : 'en-US')}
+                          {language === 'ar' ? 'المدرس: ' : 'Instructor: '}{activity.instructor_name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(activity.created_at).toLocaleString(language === 'ar' ? 'ar-SA' : 'en-US')}
                         </p>
                       </div>
+                      {activity.active && (
+                        <Badge variant="outline" className="text-green-600 border-green-600">
+                          {language === 'ar' ? 'نشط' : 'Active'}
+                        </Badge>
+                      )}
                     </div>
                   ))}
                 </div>
