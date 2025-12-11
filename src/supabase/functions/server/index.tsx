@@ -79,8 +79,37 @@ async function hashPassword(password: string): Promise<string> {
 
 // ==================== AUTH ENDPOINTS ====================
 
+// Health check endpoint
+app.get("/server/health", async (c) => {
+  try {
+    // Check if KV store is accessible
+    const testKey = 'health_check_test';
+    await kv.set(testKey, { timestamp: Date.now() });
+    const testValue = await kv.get(testKey);
+    await kv.del(testKey);
+    
+    return c.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      database: testValue ? true : false,
+      message: 'Backend is running correctly',
+      messageAr: 'الخادم يعمل بشكل صحيح'
+    });
+  } catch (error) {
+    console.log('Health check error:', error);
+    return c.json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      database: false,
+      message: 'Backend has issues',
+      messageAr: 'الخادم يواجه مشاكل',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
 // Sign up endpoint
-app.post("/make-server-90ad488b/signup", async (c) => {
+app.post("/server/signup", async (c) => {
   try {
     const { email, password, full_name, role, university_id } = await c.req.json();
     
@@ -176,7 +205,7 @@ app.post("/make-server-90ad488b/signup", async (c) => {
 });
 
 // Sign in endpoint (for reference, actual sign-in happens on frontend)
-app.get("/make-server-90ad488b/me", async (c) => {
+app.get("/server/me", async (c) => {
   try {
     const accessToken = c.req.header('Authorization')?.split(' ')[1];
     
@@ -224,7 +253,7 @@ app.get("/make-server-90ad488b/me", async (c) => {
 });
 
 // Session management - check and register session
-app.post("/make-server-90ad488b/session/register", async (c) => {
+app.post("/server/session/register", async (c) => {
   try {
     const accessToken = c.req.header('Authorization')?.split(' ')[1];
     
@@ -293,7 +322,7 @@ app.post("/make-server-90ad488b/session/register", async (c) => {
 });
 
 // Session management - logout
-app.post("/make-server-90ad488b/session/logout", async (c) => {
+app.post("/server/session/logout", async (c) => {
   try {
     const accessToken = c.req.header('Authorization')?.split(' ')[1];
     
@@ -331,7 +360,7 @@ app.post("/make-server-90ad488b/session/logout", async (c) => {
 
 // ==================== USER MANAGEMENT (ADMIN) ====================
 
-app.delete("/make-server-90ad488b/users/:userId", async (c) => {
+app.delete("/server/users/:userId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -365,7 +394,7 @@ app.delete("/make-server-90ad488b/users/:userId", async (c) => {
 
 // ==================== COURSE MANAGEMENT ====================
 
-app.post("/make-server-90ad488b/courses", async (c) => {
+app.post("/server/courses", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -405,7 +434,7 @@ app.post("/make-server-90ad488b/courses", async (c) => {
   }
 });
 
-app.get("/make-server-90ad488b/courses", async (c) => {
+app.get("/server/courses", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -436,7 +465,7 @@ app.get("/make-server-90ad488b/courses", async (c) => {
   }
 });
 
-app.put("/make-server-90ad488b/courses/:courseId", async (c) => {
+app.put("/server/courses/:courseId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -466,7 +495,7 @@ app.put("/make-server-90ad488b/courses/:courseId", async (c) => {
   }
 });
 
-app.delete("/make-server-90ad488b/courses/:courseId", async (c) => {
+app.delete("/server/courses/:courseId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -525,7 +554,7 @@ app.delete("/make-server-90ad488b/courses/:courseId", async (c) => {
 
 // ==================== ENROLLMENT ====================
 
-app.post("/make-server-90ad488b/enrollments", async (c) => {
+app.post("/server/enrollments", async (c) => {
   try {
     console.log('📝 POST /enrollments - Enrollment request received');
     const { error, user } = await getAuthenticatedUser(c.req.raw);
@@ -569,7 +598,7 @@ app.post("/make-server-90ad488b/enrollments", async (c) => {
   }
 });
 
-app.get("/make-server-90ad488b/enrollments/:courseId", async (c) => {
+app.get("/server/enrollments/:courseId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -601,7 +630,7 @@ app.get("/make-server-90ad488b/enrollments/:courseId", async (c) => {
 
 // ==================== SCHEDULE MANAGEMENT ====================
 
-app.post("/make-server-90ad488b/schedules", async (c) => {
+app.post("/server/schedules", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -639,7 +668,7 @@ app.post("/make-server-90ad488b/schedules", async (c) => {
   }
 });
 
-app.get("/make-server-90ad488b/schedules", async (c) => {
+app.get("/server/schedules", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -680,7 +709,7 @@ app.get("/make-server-90ad488b/schedules", async (c) => {
   }
 });
 
-app.delete("/make-server-90ad488b/schedules/:scheduleId", async (c) => {
+app.delete("/server/schedules/:scheduleId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -704,7 +733,7 @@ app.delete("/make-server-90ad488b/schedules/:scheduleId", async (c) => {
 
 // ==================== SESSION MANAGEMENT (ATTENDANCE CODES) ====================
 
-app.post("/make-server-90ad488b/sessions", async (c) => {
+app.post("/server/sessions", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -758,7 +787,7 @@ app.post("/make-server-90ad488b/sessions", async (c) => {
   }
 });
 
-app.get("/make-server-90ad488b/sessions/:courseId", async (c) => {
+app.get("/server/sessions/:courseId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -778,7 +807,7 @@ app.get("/make-server-90ad488b/sessions/:courseId", async (c) => {
 });
 
 // Get all active live sessions for students
-app.get("/make-server-90ad488b/sessions", async (c) => {
+app.get("/server/sessions", async (c) => {
   try {
     console.log('==================================================');
     console.log('📡 GET /sessions - Fetching all active live sessions');
@@ -879,7 +908,7 @@ app.get("/make-server-90ad488b/sessions", async (c) => {
 });
 
 // Get all sessions (both regular and live) - for admin dashboard and reports
-app.get("/make-server-90ad488b/sessions/all", async (c) => {
+app.get("/server/sessions/all", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -916,7 +945,7 @@ app.get("/make-server-90ad488b/sessions/all", async (c) => {
   }
 });
 
-app.post("/make-server-90ad488b/sessions/:sessionId/deactivate", async (c) => {
+app.post("/server/sessions/:sessionId/deactivate", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -950,7 +979,7 @@ app.post("/make-server-90ad488b/sessions/:sessionId/deactivate", async (c) => {
 });
 
 // Delete session
-app.delete("/make-server-90ad488b/sessions/:sessionId", async (c) => {
+app.delete("/server/sessions/:sessionId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -996,7 +1025,7 @@ app.delete("/make-server-90ad488b/sessions/:sessionId", async (c) => {
 // ==================== ATTENDANCE ====================
 
 // Fingerprint Biometric Attendance (Real fingerprint verification)
-app.post("/make-server-90ad488b/fingerprint-attend", async (c) => {
+app.post("/server/fingerprint-attend", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1058,7 +1087,7 @@ app.post("/make-server-90ad488b/fingerprint-attend", async (c) => {
   }
 });
 
-app.post("/make-server-90ad488b/attendance", async (c) => {
+app.post("/server/attendance", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1125,7 +1154,7 @@ app.post("/make-server-90ad488b/attendance", async (c) => {
   }
 });
 
-app.get("/make-server-90ad488b/attendance/student", async (c) => {
+app.get("/server/attendance/student", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1158,7 +1187,7 @@ app.get("/make-server-90ad488b/attendance/student", async (c) => {
   }
 });
 
-app.get("/make-server-90ad488b/attendance/course/:courseId", async (c) => {
+app.get("/server/attendance/course/:courseId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1203,7 +1232,7 @@ app.get("/make-server-90ad488b/attendance/course/:courseId", async (c) => {
 
 // ==================== REPORTS ====================
 
-app.get("/make-server-90ad488b/reports/course/:courseId", async (c) => {
+app.get("/server/reports/course/:courseId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1265,7 +1294,7 @@ app.get("/make-server-90ad488b/reports/course/:courseId", async (c) => {
   }
 });
 
-app.get("/make-server-90ad488b/reports/overview", async (c) => {
+app.get("/server/reports/overview", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1331,7 +1360,7 @@ app.get("/make-server-90ad488b/reports/overview", async (c) => {
 // ==================== ATTENDANCE ENDPOINTS ====================
 
 // Get today's attendance (for all users - filtered by role)
-app.get("/make-server-90ad488b/attendance/today", async (c) => {
+app.get("/server/attendance/today", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1373,7 +1402,7 @@ app.get("/make-server-90ad488b/attendance/today", async (c) => {
 });
 
 // Get my attendance (for students)
-app.get("/make-server-90ad488b/attendance/my", async (c) => {
+app.get("/server/attendance/my", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1404,7 +1433,7 @@ app.get("/make-server-90ad488b/attendance/my", async (c) => {
 });
 
 // Get all users (with role-based filtering)
-app.get("/make-server-90ad488b/users", async (c) => {
+app.get("/server/users", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1450,7 +1479,7 @@ app.get("/make-server-90ad488b/users", async (c) => {
 // ==================== ADVANCED STATISTICS (ADMIN) ====================
 
 // Get comprehensive dashboard statistics for Admin
-app.get("/make-server-90ad488b/stats/dashboard", async (c) => {
+app.get("/server/stats/dashboard", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
@@ -1559,7 +1588,7 @@ app.get("/make-server-90ad488b/stats/dashboard", async (c) => {
 });
 
 // Health check endpoint
-app.get("/make-server-90ad488b/health", (c) => {
+app.get("/server/health", (c) => {
   return c.json({ status: "ok" });
 });
 
@@ -1575,7 +1604,7 @@ function generateAttendanceCode(): string {
 }
 
 // Create new live session
-app.post("/make-server-90ad488b/live-sessions", async (c) => {
+app.post("/server/live-sessions", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -1653,7 +1682,7 @@ app.post("/make-server-90ad488b/live-sessions", async (c) => {
 });
 
 // Start a live session
-app.post("/make-server-90ad488b/live-sessions/:sessionId/start", async (c) => {
+app.post("/server/live-sessions/:sessionId/start", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -1739,7 +1768,7 @@ app.post("/make-server-90ad488b/live-sessions/:sessionId/start", async (c) => {
 });
 
 // End a live session
-app.post("/make-server-90ad488b/live-sessions/:sessionId/end", async (c) => {
+app.post("/server/live-sessions/:sessionId/end", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -1781,7 +1810,7 @@ app.post("/make-server-90ad488b/live-sessions/:sessionId/end", async (c) => {
 });
 
 // Record participant joining from Jitsi (for real-time tracking)
-app.post("/make-server-90ad488b/live-session-join", async (c) => {
+app.post("/server/live-session-join", async (c) => {
   try {
     const { session_id, participant_id, participant_name, participant_email, joined_at } = await c.req.json();
     
@@ -1844,7 +1873,7 @@ app.post("/make-server-90ad488b/live-session-join", async (c) => {
 });
 
 // Join a live session (student)
-app.post("/make-server-90ad488b/live-sessions/:sessionId/join", async (c) => {
+app.post("/server/live-sessions/:sessionId/join", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -1915,7 +1944,7 @@ app.post("/make-server-90ad488b/live-sessions/:sessionId/join", async (c) => {
 });
 
 // Get instructor's live sessions
-app.get("/make-server-90ad488b/live-sessions/instructor", async (c) => {
+app.get("/server/live-sessions/instructor", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -1942,7 +1971,7 @@ app.get("/make-server-90ad488b/live-sessions/instructor", async (c) => {
 });
 
 // Get active live sessions for student
-app.get("/make-server-90ad488b/live-sessions/active", async (c) => {
+app.get("/server/live-sessions/active", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -1981,7 +2010,7 @@ app.get("/make-server-90ad488b/live-sessions/active", async (c) => {
 });
 
 // Get session details
-app.get("/make-server-90ad488b/live-sessions/:sessionId", async (c) => {
+app.get("/server/live-sessions/:sessionId", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -2017,7 +2046,7 @@ app.get("/make-server-90ad488b/live-sessions/:sessionId", async (c) => {
 });
 
 // Get user notifications
-app.get("/make-server-90ad488b/notifications", async (c) => {
+app.get("/server/notifications", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -2042,7 +2071,7 @@ app.get("/make-server-90ad488b/notifications", async (c) => {
 });
 
 // Mark notification as read
-app.post("/make-server-90ad488b/notifications/:notificationId/read", async (c) => {
+app.post("/server/notifications/:notificationId/read", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -2073,7 +2102,7 @@ app.post("/make-server-90ad488b/notifications/:notificationId/read", async (c) =
 // ==================== SUPERVISOR ENDPOINTS ====================
 
 // Get supervisor dashboard statistics
-app.get("/make-server-90ad488b/supervisor/stats", async (c) => {
+app.get("/server/supervisor/stats", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {
@@ -2199,7 +2228,7 @@ app.get("/make-server-90ad488b/supervisor/stats", async (c) => {
 
 // Get public stats for landing page (no authentication required)
 // Uses REAL SQL DATABASE queries instead of KV store
-app.get("/make-server-90ad488b/stats/public", async (c) => {
+app.get("/server/stats/public", async (c) => {
   try {
     console.log('📊 GET /stats/public - Fetching public statistics from REAL DATABASE');
     
@@ -2289,7 +2318,7 @@ app.get("/make-server-90ad488b/stats/public", async (c) => {
 // ==================== DEMO DATA ====================
 
 // Initialize demo data for a user
-app.post("/make-server-90ad488b/init-demo-data", async (c) => {
+app.post("/server/init-demo-data", async (c) => {
   try {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     if (error || !user) {

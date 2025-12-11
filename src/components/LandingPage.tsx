@@ -42,11 +42,11 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
     queryFn: async () => {
       try {
         console.log('🔍 Fetching landing stats from API...');
-        console.log('📍 URL:', `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/stats/public`);
+        console.log('📍 URL:', `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/stats/public`);
         
         // Call the public stats API endpoint
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/stats/public`,
+          `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/stats/public`,
           {
             method: 'GET',
             headers: {

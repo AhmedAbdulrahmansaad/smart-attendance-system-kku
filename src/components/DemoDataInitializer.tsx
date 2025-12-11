@@ -27,7 +27,7 @@ export function DemoDataInitializer({ onSuccess }: DemoDataInitializerProps) {
       console.log('🎬 [Demo] Requesting demo data initialization...');
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/init-demo-data`,
+        `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/init-demo-data`,
         {
           method: 'POST',
           headers: {

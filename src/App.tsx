@@ -29,6 +29,7 @@ const TeamPage = lazy(() => import('./components/TeamPage').then(m => ({ default
 const BackendHealthCheck = lazy(() => import('./components/BackendHealthCheck').then(m => ({ default: m.BackendHealthCheck })));
 const SupabaseSetupGuide = lazy(() => import('./components/SupabaseSetupGuide').then(m => ({ default: m.SupabaseSetupGuide })));
 const DatabaseConnectionTest = lazy(() => import('./components/DatabaseConnectionTest').then(m => ({ default: m.DatabaseConnectionTest })));
+const SystemHealthCheck = lazy(() => import('./components/SystemHealthCheck').then(m => ({ default: m.SystemHealthCheck })));
 
 type Page = 'landing' | 'login' | 'team' | 'dashboard' | string;
 
@@ -290,7 +291,7 @@ function AppContent() {
           </div>
           <ErrorBoundary>
             <Suspense fallback={<LoadingFallback />}>
-              <BackendHealthCheck />
+              <SystemHealthCheck />
             </Suspense>
           </ErrorBoundary>
         </div>

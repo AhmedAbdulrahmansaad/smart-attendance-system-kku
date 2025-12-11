@@ -245,7 +245,7 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
       console.log('🔵 [Fingerprint] Submitting attendance...');
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/fingerprint-attend`,
+        `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/fingerprint-attend`,
         {
           method: 'POST',
           headers: {
@@ -511,7 +511,7 @@ export function FingerprintAttendance({ onScanComplete, sessionId, courseId }: F
                 {scanning ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    {language === 'ar' ? '��ارٍ التسجيل...' : 'Registering...'}
+                    {language === 'ar' ? 'ارٍ التسجيل...' : 'Registering...'}
                   </>
                 ) : (
                   <>
