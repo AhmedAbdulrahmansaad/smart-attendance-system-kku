@@ -10,9 +10,9 @@ import { FingerprintAttendance } from './FingerprintAttendance';
 import { LiveStreamViewer } from './LiveStreamViewer';
 import { NFCAttendance } from './NFCAttendance';
 import { useAuth } from './AuthContext';
-import { apiRequest } from '../utils/api';
 import { useLanguage } from './LanguageContext';
 import { supabase } from '../utils/supabaseClient';
+import { toast } from 'sonner';
 
 interface Session {
   id: string;
@@ -52,7 +52,7 @@ export function StudentAttendance() {
     setLoading(true);
 
     try {
-      if (!token) {
+      if (!token || !user) {
         setError(language === 'ar' ? 'يرجى تسجيل الدخول أولاً' : 'Please login first');
         setLoading(false);
         return;
@@ -60,36 +60,95 @@ export function StudentAttendance() {
 
       const code = sessionCode.toUpperCase().trim();
 
-      // Mark attendance using API
-      await apiRequest('/attendance', {
-        method: 'POST',
-        body: { session_code: code },
-        token
-      });
+      console.log('📝 [StudentAttendance] Marking attendance with code:', code);
 
+      // Step 1: Find the session by code
+      const { data: session, error: sessionError } = await supabase
+        .from('sessions')
+        .select('id, course_id, active, expires_at')
+        .eq('code', code)
+        .single();
+
+      if (sessionError || !session) {
+        console.error('❌ [StudentAttendance] Session not found:', sessionError);
+        setError(language === 'ar' ? 'كود جلسة غير صحيح' : 'Invalid session code');
+        setLoading(false);
+        return;
+      }
+
+      // Step 2: Check if session is active
+      if (!session.active) {
+        console.error('❌ [StudentAttendance] Session is not active');
+        setError(language === 'ar' ? 'الجلسة غير نشطة' : 'Session is not active');
+        setLoading(false);
+        return;
+      }
+
+      // Step 3: Check if session has expired
+      const now = new Date();
+      const expiresAt = new Date(session.expires_at);
+      if (now > expiresAt) {
+        console.error('❌ [StudentAttendance] Session has expired');
+        setError(language === 'ar' ? 'انتهت صلاحية الجلسة' : 'Session has expired');
+        setLoading(false);
+        return;
+      }
+
+      // Step 4: Check if student is enrolled in this course
+      const { data: enrollment, error: enrollmentError } = await supabase
+        .from('enrollments')
+        .select('id')
+        .eq('student_id', user.id)
+        .eq('course_id', session.course_id)
+        .single();
+
+      if (enrollmentError || !enrollment) {
+        console.error('❌ [StudentAttendance] Student not enrolled:', enrollmentError);
+        setError(language === 'ar' ? 'أنت غير مسجل في هذه المادة' : 'You are not enrolled in this course');
+        setLoading(false);
+        return;
+      }
+
+      // Step 5: Check if attendance already recorded
+      const { data: existingAttendance, error: existingError } = await supabase
+        .from('attendance')
+        .select('id')
+        .eq('student_id', user.id)
+        .eq('session_id', session.id)
+        .single();
+
+      if (existingAttendance) {
+        console.error('❌ [StudentAttendance] Attendance already recorded');
+        setError(language === 'ar' ? 'تم تسجيل الحضور مسبقاً لهذه الجلسة' : 'Attendance already recorded for this session');
+        setLoading(false);
+        return;
+      }
+
+      // Step 6: Record attendance
+      const { error: insertError } = await supabase
+        .from('attendance')
+        .insert({
+          session_id: session.id,
+          student_id: user.id,
+          course_id: session.course_id,
+          status: 'present',
+          recorded_at: new Date().toISOString(),
+        });
+
+      if (insertError) {
+        console.error('❌ [StudentAttendance] Failed to insert attendance:', insertError);
+        throw insertError;
+      }
+
+      console.log('✅ [StudentAttendance] Attendance recorded successfully');
       setSuccess(true);
       setSessionCode('');
+      toast.success(language === 'ar' ? '✅ تم تسجيل حضورك بنجاح!' : '✅ Attendance marked successfully!');
     } catch (err: any) {
+      console.error('❌ [StudentAttendance] Error:', err);
       const errorMessage = err.message || (language === 'ar' ? 'فشل تسجيل الحضور' : 'Failed to mark attendance');
-      
-      // Translate common error messages to Arabic
-      if (language === 'ar') {
-        if (errorMessage.includes('Invalid session code')) {
-          setError('كود جلسة غير صحيح');
-        } else if (errorMessage.includes('Session is not active')) {
-          setError('الجلسة غير نشطة');
-        } else if (errorMessage.includes('Session has expired')) {
-          setError('انتهت صلاحية الجلسة');
-        } else if (errorMessage.includes('not enrolled')) {
-          setError('أنت غير مسجل في هذه المادة');
-        } else if (errorMessage.includes('already recorded')) {
-          setError('تم تسجيل الحضور مسبقاً لهذه الجلسة');
-        } else {
-          setError(errorMessage);
-        }
-      } else {
-        setError(errorMessage);
-      }
+      setError(errorMessage);
+      toast.error(language === 'ar' ? '❌ فشل تسجيل الحضور' : '❌ Failed to mark attendance');
     } finally {
       setLoading(false);
     }

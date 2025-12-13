@@ -25,10 +25,11 @@ import {
 } from './ui/alert-dialog';
 import { Alert, AlertDescription } from './ui/alert';
 import { Plus, Copy, Check, AlertCircle, Timer, XCircle, BookOpen, ArrowRight, Video, ClipboardCheck, Trash2 } from 'lucide-react';
-import { apiRequest } from '../utils/api';
+import { supabase } from '../utils/supabaseClient';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
 import { LiveStreamHost } from './LiveStreamHost';
+import { toast } from 'sonner';
 
 interface Session {
   id: string;
@@ -58,7 +59,7 @@ interface SessionManagementProps {
 
 export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
   const { language } = useLanguage();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,15 +101,22 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
         return;
       }
 
-      console.log('📡 [SessionManagement] Fetching courses...');
-      const data = await apiRequest('/courses', {
-        token: token,
-      });
+      console.log('📡 [SessionManagement] Fetching courses from Supabase...');
+      const { data, error } = await supabase
+        .from('courses')
+        .select('*')
+        .order('course_name', { ascending: true });
 
-      console.log('✅ [SessionManagement] Courses loaded:', data.courses.length);
-      setCourses(data.courses);
+      if (error) {
+        console.error('❌ [SessionManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [SessionManagement] Courses loaded:', data?.length);
+      setCourses(data || []);
     } catch (error) {
       console.error('❌ [SessionManagement] Error loading courses:', error);
+      toast.error('فشل تحميل المواد / Failed to load courses');
       setError('فشل تحميل المواد');
       setLoading(false);
     }
@@ -132,30 +140,22 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
         return;
       }
 
-      // Load sessions for all courses
-      const allSessions: Session[] = [];
-      
-      console.log('📡 [SessionManagement] Fetching sessions for', courses.length, 'courses...');
-      for (const course of courses) {
-        try {
-          console.log(`  📖 Loading sessions for course: ${course.course_name} (${course.id})`);
-          // FIX: Use the correct endpoint /sessions/:courseId instead of /courses/:courseId
-          const data = await apiRequest(`/sessions/${course.id}`, {
-            token: token,
-          });
-          console.log(`  ✅ Found ${data.sessions.length} sessions for ${course.course_name}`);
-          allSessions.push(...data.sessions);
-        } catch (err) {
-          console.error(`  ❌ Error loading sessions for course ${course.course_name}:`, err);
-        }
+      console.log('📡 [SessionManagement] Fetching sessions from Supabase...');
+      const { data, error } = await supabase
+        .from('sessions')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('❌ [SessionManagement] Error:', error);
+        throw error;
       }
 
-      // Sort by created_at descending
-      allSessions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      console.log('✅ [SessionManagement] Total sessions loaded:', allSessions.length);
-      setSessions(allSessions);
+      console.log('✅ [SessionManagement] Total sessions loaded:', data?.length);
+      setSessions(data || []);
     } catch (error) {
       console.error('❌ [SessionManagement] Error loading sessions:', error);
+      toast.error('فشل تحميل الجلسات / Failed to load sessions');
       setError('فشل تحميل الجلسات');
     } finally {
       console.log('✅ [SessionManagement] Setting loading to false');
@@ -170,17 +170,44 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     try {
       if (!token) return;
 
-      await apiRequest('/sessions', {
-        method: 'POST',
-        body: {
+      console.log('➕ [SessionManagement] Creating new session...');
+
+      // Generate a unique 6-character code
+      const generateCode = () => {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Exclude confusing characters
+        let code = '';
+        for (let i = 0; i < 6; i++) {
+          code += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return code;
+      };
+
+      const code = generateCode();
+      const durationMinutes = parseInt(newSessionDuration);
+      const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000).toISOString();
+
+      const { data, error } = await supabase
+        .from('sessions')
+        .insert({
           course_id: newSessionCourse,
-          duration_minutes: parseInt(newSessionDuration),
+          code: code,
+          created_by: user?.id,
+          expires_at: expiresAt,
+          active: true,
           session_type: newSessionType,
-          title: newSessionTitle,
-          description: newSessionDescription,
-        },
-        token: token,
-      });
+          title: newSessionTitle || null,
+          description: newSessionDescription || null,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ [SessionManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [SessionManagement] Session created successfully');
+      toast.success('تم إنشاء الجلسة بنجاح / Session created successfully');
 
       setIsDialogOpen(false);
       setNewSessionCourse('');
@@ -191,6 +218,8 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
       
       await loadAllSessions();
     } catch (err: any) {
+      console.error('❌ [SessionManagement] Error creating session:', err);
+      toast.error('فشل إنشاء الجلسة / Failed to create session');
       setError(err.message || 'فشل إنشاء الجلسة');
     }
   };
@@ -203,14 +232,25 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     try {
       if (!token) return;
 
-      await apiRequest(`/sessions/${sessionId}/deactivate`, {
-        method: 'POST',
-        token: token,
-      });
+      console.log('⏸️ [SessionManagement] Deactivating session...');
+
+      const { error } = await supabase
+        .from('sessions')
+        .update({ active: false })
+        .eq('id', sessionId);
+
+      if (error) {
+        console.error('❌ [SessionManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [SessionManagement] Session deactivated successfully');
+      toast.success('تم إيقاف الجلسة بنجاح / Session deactivated successfully');
 
       await loadAllSessions();
-    } catch (error) {
-      console.error('Error deactivating session:', error);
+    } catch (error: any) {
+      console.error('❌ [SessionManagement] Error deactivating session:', error);
+      toast.error('فشل إيقاف الجلسة / Failed to deactivate session');
       setError('فشل إيقاف الجلسة');
     }
   };
@@ -221,16 +261,27 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     try {
       if (!token) return;
 
-      await apiRequest(`/sessions/${sessionToDelete.id}`, {
-        method: 'DELETE',
-        token: token,
-      });
+      console.log('🗑️ [SessionManagement] Deleting session...');
+
+      const { error } = await supabase
+        .from('sessions')
+        .delete()
+        .eq('id', sessionToDelete.id);
+
+      if (error) {
+        console.error('❌ [SessionManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [SessionManagement] Session deleted successfully');
+      toast.success('تم حذف الجلسة بنجاح / Session deleted successfully');
 
       setIsDeleteDialogOpen(false);
       setSessionToDelete(null);
       await loadAllSessions();
-    } catch (error) {
-      console.error('Error deleting session:', error);
+    } catch (error: any) {
+      console.error('❌ [SessionManagement] Error deleting session:', error);
+      toast.error('فشل حذف الجلسة / Failed to delete session');
       setError('فشل حذف الجلسة');
       setIsDeleteDialogOpen(false);
       setSessionToDelete(null);

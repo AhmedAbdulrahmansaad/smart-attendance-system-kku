@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'motion/react';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
-import { useAdminDashboardStats } from '../hooks/useAdminData';
+import { useAdminDashboardStats } from '../hooks/useSupabaseData';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -26,8 +26,8 @@ export function AdminDashboard() {
   const { language } = useLanguage();
   const { token } = useAuth();
   
-  // استخدام الـ hook الشامل لجلب جميع البيانات
-  const { data, isLoading, isError, error } = useAdminDashboardStats({ token });
+  // استخدام الـ hook الشامل لجلب جميع البيانات مباشرة من Supabase
+  const { data, isLoading, isError, error } = useAdminDashboardStats();
   
   const stats = data?.stats || {
     totalUsers: 0,

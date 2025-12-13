@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { apiRequest } from '../utils/api';
 import { useEffect, useRef } from 'react';
 import { supabase } from '../utils/supabaseClient';
 
@@ -16,25 +15,65 @@ export function useStudentCourses({ token, userId, enabled = true }: UseStudentD
       if (!token || !userId) throw new Error('No token or userId');
       
       try {
-        const data = await apiRequest('/courses', { token });
-        const allCourses = data.courses || [];
+        console.log('📚 [useStudentCourses] Loading courses for student:', userId);
         
-        // Filter courses where student is enrolled - client-side filtering
-        const studentCourses = allCourses.filter((c: any) => 
-          c.enrolled_students?.includes(userId) || c.students?.includes(userId)
+        // Get enrollments for this student with course details
+        const { data: enrollments, error } = await supabase
+          .from('enrollments')
+          .select(`
+            course_id,
+            courses (
+              id,
+              course_code,
+              course_name,
+              instructor_id,
+              semester,
+              year
+            )
+          `)
+          .eq('student_id', userId);
+
+        if (error) {
+          console.error('❌ [useStudentCourses] Error:', error);
+          throw error;
+        }
+
+        if (!enrollments || enrollments.length === 0) {
+          console.log('⚠️ [useStudentCourses] No enrollments found');
+          return [];
+        }
+
+        // Get instructor names
+        const instructorIds = enrollments
+          .map((e: any) => e.courses?.instructor_id)
+          .filter((id: string) => id);
+
+        const { data: instructors } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', instructorIds);
+
+        const instructorMap = new Map(
+          instructors?.map((i: any) => [i.id, i.full_name]) || []
         );
-        
-        // Return only needed fields to reduce memory
-        return studentCourses.map((c: any) => ({
-          id: c.id,
-          code: c.course_code || c.code,
-          name: c.course_name || c.name,
-          instructor_id: c.instructor_id,
-          instructor_name: c.instructor_name,
-          credits: c.credits,
-        }));
+
+        // Map to simplified structure
+        const courses = enrollments
+          .filter((e: any) => e.courses) // Filter out invalid enrollments
+          .map((e: any) => ({
+            id: e.courses.id,
+            code: e.courses.course_code,
+            name: e.courses.course_name,
+            instructor_id: e.courses.instructor_id,
+            instructor_name: instructorMap.get(e.courses.instructor_id) || 'Unknown',
+            semester: e.courses.semester,
+            year: e.courses.year,
+          }));
+
+        console.log('✅ [useStudentCourses] Loaded', courses.length, 'courses');
+        return courses;
       } catch (error: any) {
-        console.error('❌ Error fetching student courses:', error.message);
+        console.error('❌ [useStudentCourses] Error:', error);
         throw error;
       }
     },
@@ -53,44 +92,33 @@ export function useStudentCourses({ token, userId, enabled = true }: UseStudentD
   useEffect(() => {
     if (!userId || !enabled) return;
 
-    console.log('🔔 Setting up realtime listener for student enrollments:', userId);
+    console.log('🔔 [useStudentCourses] Setting up realtime listener for enrollments');
     
-    // Subscribe to changes in kv_store table for this user's enrollments
+    // Subscribe to changes in enrollments table
     const channel = supabase
       .channel(`enrollment-changes-${userId}`)
       .on(
         'postgres_changes',
         { 
-          event: 'INSERT', 
+          event: '*', // INSERT, UPDATE, DELETE
           schema: 'public', 
-          table: 'kv_store_90ad488b',
-          filter: `key=like.enrollment:${userId}:%`
+          table: 'enrollments',
+          filter: `student_id=eq.${userId}`
         },
         (payload) => {
-          console.log('🎉 New enrollment detected!', payload);
-          // Invalidate and refetch courses immediately
+          console.log('🎉 [useStudentCourses] Enrollment changed!', payload);
+          // Refetch courses immediately
           refetchRef.current();
         }
       )
       .subscribe((status) => {
-        console.log('🔔 Realtime subscription status:', status);
-        if (status === 'CHANNEL_ERROR') {
-          console.warn('⚠️ Realtime subscription failed. Using polling as fallback.');
-        }
+        console.log('🔔 [useStudentCourses] Realtime subscription status:', status);
       });
 
-    // Fallback: Polling every 10 seconds as backup
-    // This ensures updates even if Realtime doesn't work
-    const pollingInterval = setInterval(() => {
-      console.log('🔄 Polling for enrollment changes...');
-      refetchRef.current();
-    }, 10000); // Poll every 10 seconds
-
-    // Cleanup subscription and polling on unmount
+    // Cleanup subscription on unmount
     return () => {
-      console.log('🔕 Cleaning up realtime listener and polling');
+      console.log('🔕 [useStudentCourses] Cleaning up realtime listener');
       supabase.removeChannel(channel);
-      clearInterval(pollingInterval);
     };
   }, [userId, enabled]);
 
@@ -105,31 +133,50 @@ export function useStudentSessions({ token, courseIds, enabled = true }: { token
       if (!courseIds || courseIds.length === 0) return [];
       
       try {
-        const data = await apiRequest('/sessions', { token });
-        const allSessions = data.sessions || [];
+        console.log('📅 [useStudentSessions] Loading sessions for', courseIds.length, 'courses');
         
-        // Filter sessions for student's courses only
-        const studentSessions = allSessions.filter((s: any) => 
-          courseIds.includes(s.course_id)
-        );
-        
-        // Sort by date descending and limit to recent 50 sessions
-        return studentSessions
-          .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
-          .slice(0, 50)
-          .map((s: any) => ({
-            id: s.id,
-            course_id: s.course_id,
-            course_name: s.course_name,
-            course_code: s.course_code,
-            date: s.date,
-            start_time: s.start_time,
-            end_time: s.end_time,
-            status: s.status,
-            is_live: s.is_live,
-          }));
+        // Get all sessions for student's courses
+        const { data: sessions, error } = await supabase
+          .from('sessions')
+          .select(`
+            id,
+            course_id,
+            session_date,
+            session_type,
+            title,
+            active,
+            expires_at,
+            courses (
+              course_code,
+              course_name
+            )
+          `)
+          .in('course_id', courseIds)
+          .order('session_date', { ascending: false })
+          .limit(50);
+
+        if (error) {
+          console.error('❌ [useStudentSessions] Error:', error);
+          throw error;
+        }
+
+        // Map to simplified structure
+        const mappedSessions = (sessions || []).map((s: any) => ({
+          id: s.id,
+          course_id: s.course_id,
+          course_name: s.courses?.course_name || 'Unknown',
+          course_code: s.courses?.course_code || 'N/A',
+          date: s.session_date,
+          session_type: s.session_type,
+          title: s.title,
+          active: s.active,
+          expires_at: s.expires_at,
+        }));
+
+        console.log('✅ [useStudentSessions] Loaded', mappedSessions.length, 'sessions');
+        return mappedSessions;
       } catch (error: any) {
-        console.error('❌ Error fetching student sessions:', error.message);
+        console.error('❌ [useStudentSessions] Error:', error);
         throw error;
       }
     },
@@ -148,23 +195,35 @@ export function useStudentAttendance({ token, userId, enabled = true }: UseStude
       if (!token || !userId) throw new Error('No token or userId');
       
       try {
-        const data = await apiRequest('/attendance/my', { token });
-        const allAttendance = data.attendance || [];
+        console.log('✅ [useStudentAttendance] Loading attendance for student:', userId);
         
-        // Sort by date descending and limit to recent 100 records
-        return allAttendance
-          .sort((a: any, b: any) => new Date(b.created_at || b.date).getTime() - new Date(a.created_at || a.date).getTime())
-          .slice(0, 100)
-          .map((a: any) => ({
-            id: a.id,
-            session_id: a.session_id,
-            student_id: a.student_id,
-            status: a.status,
-            date: a.date || a.created_at,
-            course_id: a.course_id,
-          }));
+        // Get all attendance records for this student
+        const { data: attendance, error } = await supabase
+          .from('attendance')
+          .select('id, session_id, student_id, status, recorded_at, course_id')
+          .eq('student_id', userId)
+          .order('recorded_at', { ascending: false })
+          .limit(100);
+
+        if (error) {
+          console.error('❌ [useStudentAttendance] Error:', error);
+          throw error;
+        }
+
+        // Map to simplified structure
+        const mappedAttendance = (attendance || []).map((a: any) => ({
+          id: a.id,
+          session_id: a.session_id,
+          student_id: a.student_id,
+          status: a.status,
+          date: a.recorded_at,
+          course_id: a.course_id,
+        }));
+
+        console.log('✅ [useStudentAttendance] Loaded', mappedAttendance.length, 'records');
+        return mappedAttendance;
       } catch (error: any) {
-        console.error('❌ Error fetching student attendance:', error.message);
+        console.error('❌ [useStudentAttendance] Error:', error);
         throw error;
       }
     },

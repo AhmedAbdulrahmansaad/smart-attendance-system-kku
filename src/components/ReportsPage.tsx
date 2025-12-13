@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { FileText, Download, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { apiRequest } from '../utils/api';
 import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthContext';
+import { toast } from 'sonner';
 
 interface Course {
   id: string;
@@ -38,16 +38,17 @@ export function ReportsPage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
-      const data = await apiRequest('/courses', {
-        token: session.access_token,
-      });
+      const data = await supabase
+        .from('courses')
+        .select('*')
+        .eq('instructor_id', user?.id);
 
-      setCourses(data.courses);
+      setCourses(data.data);
       
       // Auto-select first course if available
-      if (data.courses.length > 0) {
-        setSelectedCourse(data.courses[0].id);
-        loadReport(data.courses[0].id);
+      if (data.data.length > 0) {
+        setSelectedCourse(data.data[0].id);
+        loadReport(data.data[0].id);
       }
     } catch (error) {
       console.error('Error loading courses:', error);
@@ -62,16 +63,88 @@ export function ReportsPage() {
     setError('');
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      console.log('📊 [ReportsPage] Loading report for course:', courseId);
 
-      const data = await apiRequest(`/reports/course/${courseId}`, {
-        token: session.access_token,
+      // Get all sessions for this course
+      const { data: sessions, error: sessionsError } = await supabase
+        .from('sessions')
+        .select('id')
+        .eq('course_id', courseId);
+
+      if (sessionsError) throw sessionsError;
+
+      if (!sessions || sessions.length === 0) {
+        console.log('⚠️ [ReportsPage] No sessions found for this course');
+        setReport([]);
+        setLoading(false);
+        return;
+      }
+
+      const sessionIds = sessions.map(s => s.id);
+      console.log('✅ [ReportsPage] Found', sessionIds.length, 'sessions');
+
+      // Get all enrollments for this course
+      const { data: enrollments, error: enrollmentsError } = await supabase
+        .from('enrollments')
+        .select('student_id, profiles!inner(full_name, email)')
+        .eq('course_id', courseId);
+
+      if (enrollmentsError) throw enrollmentsError;
+
+      if (!enrollments || enrollments.length === 0) {
+        console.log('⚠️ [ReportsPage] No students enrolled in this course');
+        setReport([]);
+        setLoading(false);
+        return;
+      }
+
+      console.log('✅ [ReportsPage] Found', enrollments.length, 'enrolled students');
+
+      // Get all attendance records for these sessions
+      const { data: attendance, error: attendanceError } = await supabase
+        .from('attendance')
+        .select('student_id, session_id, status')
+        .in('session_id', sessionIds);
+
+      if (attendanceError) throw attendanceError;
+
+      console.log('✅ [ReportsPage] Found', attendance?.length || 0, 'attendance records');
+
+      // Calculate report for each student
+      const studentReports: StudentReport[] = enrollments.map((enrollment: any) => {
+        const studentId = enrollment.student_id;
+        const studentName = enrollment.profiles?.full_name || 'Unknown';
+        const studentEmail = enrollment.profiles?.email || '';
+
+        // Count attended sessions for this student
+        const studentAttendance = attendance?.filter(
+          (a) => a.student_id === studentId && a.status === 'present'
+        ) || [];
+
+        const attended_sessions = studentAttendance.length;
+        const total_sessions = sessionIds.length;
+        const attendance_rate = total_sessions > 0
+          ? Math.round((attended_sessions / total_sessions) * 100)
+          : 0;
+
+        return {
+          student_id: studentId,
+          student_name: studentName,
+          student_email: studentEmail,
+          total_sessions,
+          attended_sessions,
+          attendance_rate,
+        };
       });
 
-      setReport(data.report);
-    } catch (error) {
-      console.error('Error loading report:', error);
+      // Sort by attendance rate (descending)
+      studentReports.sort((a, b) => b.attendance_rate - a.attendance_rate);
+
+      console.log('✅ [ReportsPage] Generated report for', studentReports.length, 'students');
+      setReport(studentReports);
+    } catch (error: any) {
+      console.error('❌ [ReportsPage] Error loading report:', error);
+      toast.error('فشل تحميل التقرير / Failed to load report');
       setError('فشل تحميل التقرير');
     } finally {
       setLoading(false);

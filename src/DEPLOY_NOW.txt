@@ -1,0 +1,60 @@
+================================================================================
+🚨 يجب نشر Backend الآن - DEPLOY BACKEND NOW
+================================================================================
+
+المشكلة: Edge Function غير منشور
+الحل: اتبع الأوامر أدناه بالترتيب
+
+================================================================================
+الأوامر (انسخ والصق واحداً تلو الآخر):
+================================================================================
+
+1. تثبيت Supabase CLI:
+   
+   npm install -g supabase
+
+2. تسجيل الدخول:
+   
+   supabase login
+   
+   (سيفتح المتصفح - اضغط Authorize)
+
+3. ربط المشروع:
+   
+   supabase link --project-ref pcymgqdjbdklrikdquih
+
+4. احصل على Service Role Key:
+   
+   افتح: https://supabase.com/dashboard/project/pcymgqdjbdklrikdquih/settings/api
+   انزل لأسفل
+   انسخ "service_role" key (ليس anon!)
+
+5. تعيين Secrets (استبدل YOUR_KEY بالمفتاح الذي نسخته):
+   
+   supabase secrets set SUPABASE_URL="https://pcymgqdjbdklrikdquih.supabase.co" SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBjeW1ncWRqYmRrbHJpa2RxdWloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI4MTU3ODcsImV4cCI6MjA3ODM5MTc4N30.OTHtmMPSb2AAdSBHM19JY20gb4DzLzd8zILCN-zUvoQ" SUPABASE_SERVICE_ROLE_KEY="YOUR_KEY"
+
+6. نشر Function:
+   
+   supabase functions deploy server --no-verify-jwt
+   
+   (انتظر 30 ثانية)
+
+7. اختبار:
+   
+   curl https://pcymgqdjbdklrikdquih.supabase.co/functions/v1/make-server-90ad488b/health
+   
+   المتوقع: {"status":"healthy"}
+
+8. تطبيق Database:
+   
+   افتح: https://supabase.com/dashboard/project/pcymgqdjbdklrikdquih/sql
+   انسخ محتوى database_schema.sql
+   الصق واضغط Run
+
+9. ابدأ:
+   
+   npm run dev
+
+================================================================================
+للتفاصيل: 🚨_DEPLOY_STEP_BY_STEP.md
+================================================================================

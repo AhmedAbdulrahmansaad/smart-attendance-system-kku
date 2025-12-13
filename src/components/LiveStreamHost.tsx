@@ -239,7 +239,7 @@ export function LiveStreamHost({ sessionId, sessionTitle, meetingUrl, attendance
       
       // Send to server to record attendance
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/live-session-join`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/live-session-join`,
         {
           method: 'POST',
           headers: {

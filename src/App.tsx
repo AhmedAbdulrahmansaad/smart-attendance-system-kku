@@ -1,4 +1,4 @@
-import React, { useState, lazy, Suspense } from 'react';
+import React, { useState, lazy, Suspense, useEffect } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './utils/queryClient';
 import { AuthProvider, useAuth } from './components/AuthContext';
@@ -8,8 +8,9 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { LandingPage } from './components/LandingPage';
 import { LoginPage } from './components/LoginPage';
 import { DashboardLayout } from './components/DashboardLayout';
+import { InitialSetup } from './components/InitialSetup';
 import { Button } from './components/ui/button';
-import { isSupabaseConfigured } from './utils/supabaseClient';
+import { isSupabaseConfigured, supabase } from './utils/supabaseClient';
 import { LoadingFallback } from './components/LoadingFallback';
 import { Toaster } from 'sonner@2.0.3';
 
@@ -30,13 +31,59 @@ const BackendHealthCheck = lazy(() => import('./components/BackendHealthCheck').
 const SupabaseSetupGuide = lazy(() => import('./components/SupabaseSetupGuide').then(m => ({ default: m.SupabaseSetupGuide })));
 const DatabaseConnectionTest = lazy(() => import('./components/DatabaseConnectionTest').then(m => ({ default: m.DatabaseConnectionTest })));
 const SystemHealthCheck = lazy(() => import('./components/SystemHealthCheck').then(m => ({ default: m.SystemHealthCheck })));
+const APITester = lazy(() => import('./components/APITester').then(m => ({ default: m.APITester })));
+const ConnectionTest = lazy(() => import('./components/ConnectionTest').then(m => ({ default: m.ConnectionTest })));
 
 type Page = 'landing' | 'login' | 'team' | 'dashboard' | string;
 
 function AppContent() {
-  const { user, loading } = useAuth();
+  const { user, loading, refreshUser } = useAuth();
   const { language } = useLanguage();
   const [currentPage, setCurrentPage] = useState<Page>('landing');
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [checkingSetup, setCheckingSetup] = useState(true);
+
+  // Check if system needs initial setup
+  useEffect(() => {
+    async function checkInitialSetup() {
+      try {
+        console.log('🔍 [App] Checking if system needs setup...');
+        
+        // Check if any profiles exist
+        const { data: profiles, error } = await supabase
+          .from('profiles')
+          .select('id')
+          .limit(1);
+        
+        if (error) {
+          console.error('❌ [App] Error checking profiles:', error);
+          setNeedsSetup(false);
+          setCheckingSetup(false);
+          return;
+        }
+        
+        const hasUsers = profiles && profiles.length > 0;
+        console.log('📊 [App] Has users:', hasUsers);
+        
+        setNeedsSetup(!hasUsers);
+        setCheckingSetup(false);
+      } catch (error) {
+        console.error('❌ [App] Setup check error:', error);
+        setNeedsSetup(false);
+        setCheckingSetup(false);
+      }
+    }
+    
+    checkInitialSetup();
+  }, []);
+
+  // Auto-redirect to dashboard when user logs in
+  useEffect(() => {
+    if (user && (currentPage === 'login' || currentPage === 'landing')) {
+      console.log('✅ User logged in, redirecting to dashboard...');
+      setCurrentPage('dashboard');
+    }
+  }, [user, currentPage]);
 
   // Check if Supabase is configured
   if (!isSupabaseConfigured()) {
@@ -47,6 +94,18 @@ function AppContent() {
         </Suspense>
       </ErrorBoundary>
     );
+  }
+
+  // Show setup screen if no users exist
+  if (checkingSetup) {
+    return <LoadingFallback />;
+  }
+
+  if (needsSetup && !user) {
+    return <InitialSetup onSetupComplete={() => {
+      setNeedsSetup(false);
+      refreshUser();
+    }} />;
   }
 
   if (loading) {
@@ -315,6 +374,52 @@ function AppContent() {
           <ErrorBoundary>
             <Suspense fallback={<LoadingFallback />}>
               <DatabaseConnectionTest />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentPage === 'api-test') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#006747]/5 via-white to-[#006747]/5 py-12">
+        <div className="container mx-auto px-4">
+          <div className="mb-6">
+            <Button
+              variant="outline"
+              onClick={() => setCurrentPage('landing')}
+              className="gap-2"
+            >
+              ← {language === 'ar' ? 'العودة للرئيسية' : 'Back to Home'}
+            </Button>
+          </div>
+          <ErrorBoundary>
+            <Suspense fallback={<LoadingFallback />}>
+              <APITester />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentPage === 'connection-test') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#006747]/5 via-white to-[#006747]/5 py-12">
+        <div className="container mx-auto px-4">
+          <div className="mb-6">
+            <Button
+              variant="outline"
+              onClick={() => setCurrentPage('landing')}
+              className="gap-2"
+            >
+              ← {language === 'ar' ? 'العودة للرئيسية' : 'Back to Home'}
+            </Button>
+          </div>
+          <ErrorBoundary>
+            <Suspense fallback={<LoadingFallback />}>
+              <ConnectionTest />
             </Suspense>
           </ErrorBoundary>
         </div>

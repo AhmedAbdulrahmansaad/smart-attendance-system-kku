@@ -1,6 +1,9 @@
 import { projectId, publicAnonKey } from './supabase/info';
 
-const BASE_URL = `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b`;
+// Edge Function is deployed as 'server' on Supabase
+// All routes must be prefixed with /make-server-90ad488b
+// Correct URL format: https://PROJECT_ID.supabase.co/functions/v1/make-server-90ad488b/<route>
+const BASE_URL = `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b`;
 
 export async function apiRequest(
   endpoint: string,
@@ -27,11 +30,9 @@ export async function apiRequest(
   }
 
   try {
-    console.log(`🌐 API Request: ${method} ${endpoint}`);
-    console.log(`🔑 Using token:`, token ? 'User token' : 'Anon key');
+    // Silent mode - don't log unless needed for debugging
     
     const url = `${BASE_URL}${endpoint}`;
-    console.log(`📍 Full URL:`, url);
 
     // Add timeout to fetch request
     const controller = new AbortController();
@@ -44,47 +45,36 @@ export async function apiRequest(
       });
       clearTimeout(timeoutId);
       
-      console.log(`📥 Response status:`, response.status, response.statusText);
+      // Handle 404 - Edge Function not deployed (silent)
+      if (response.status === 404) {
+        throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
+      }
       
-      const data = await response.json();
+      // Try to parse JSON, but handle non-JSON responses
+      let data;
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
+      }
       
       if (!response.ok) {
-        // Only log errors that are unexpected
-        // Don't log 401 for /me endpoint (expected when not logged in)
-        // Don't log 401 when using anon key (expected when not authenticated)
-        const shouldLog = !(
-          response.status === 401 && (
-            endpoint === '/me' || 
-            !token || 
-            token === publicAnonKey
-          )
-        );
-        
-        if (shouldLog) {
-          console.error(`❌ API error for ${endpoint}:`, data);
-        } else {
-          console.log(`ℹ️ Authentication required for ${endpoint} (expected)`);
-        }
-        
         throw new Error(data.error || 'API request failed');
       }
       
-      console.log(`✅ Success for ${endpoint}`);
       return data;
     } catch (fetchError: any) {
       clearTimeout(timeoutId);
       if (fetchError.name === 'AbortError') {
-        throw new Error('Request timeout - الخادم لا يستجيب');
+        throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
       throw fetchError;
     }
   } catch (err: any) {
-    // Only log unexpected errors
-    const isAuthError = err.message?.includes('Unauthorized') || err.message?.includes('401');
-    const isExpectedAuthError = isAuthError && (!token || token === publicAnonKey);
-    
-    if (!isExpectedAuthError) {
-      console.error(`❌ Fetch error for ${endpoint}:`, err.message);
+    // Handle Edge Function not deployed error (silent)
+    if (err.message === 'EDGE_FUNCTION_NOT_DEPLOYED') {
+      throw err;
     }
     
     throw err;

@@ -39,6 +39,59 @@ export function LoginPage({ onBack }: LoginPageProps) {
   const [signUpUniversityId, setSignUpUniversityId] = useState('');
   const [signUpRole, setSignUpRole] = useState<UserRole>('student');
 
+  // Auto-generate email from name
+  const generateEmailFromName = async (fullName: string) => {
+    if (!fullName.trim()) {
+      setSignUpEmail('');
+      return;
+    }
+
+    try {
+      // Convert Arabic/English name to email format
+      const nameParts = fullName.trim().split(/\s+/);
+      let emailPrefix = '';
+      
+      // Use first and last name
+      if (nameParts.length >= 2) {
+        emailPrefix = `${nameParts[0]}.${nameParts[nameParts.length - 1]}`.toLowerCase();
+      } else {
+        emailPrefix = nameParts[0].toLowerCase();
+      }
+      
+      // Transliterate Arabic to English (basic)
+      const arabicToEnglish: { [key: string]: string } = {
+        'أ': 'a', 'ا': 'a', 'إ': 'i', 'آ': 'a',
+        'ب': 'b', 'ت': 't', 'ث': 'th', 'ج': 'j',
+        'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'th',
+        'ر': 'r', 'ز': 'z', 'س': 's', 'ش': 'sh',
+        'ص': 's', 'ض': 'd', 'ط': 't', 'ظ': 'z',
+        'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'q',
+        'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n',
+        'ه': 'h', 'و': 'w', 'ي': 'y', 'ى': 'a',
+        'ة': 'h', 'ء': 'a'
+      };
+      
+      emailPrefix = emailPrefix.split('').map(char => 
+        arabicToEnglish[char] || char
+      ).join('');
+      
+      // Clean up and add domain
+      emailPrefix = emailPrefix.replace(/[^a-z.]/g, '');
+      const generatedEmail = `${emailPrefix}@kku.edu.sa`;
+      
+      setSignUpEmail(generatedEmail);
+    } catch (error) {
+      console.error('Error generating email:', error);
+    }
+  };
+
+  // Handle name change with auto email generation
+  const handleFullNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const name = e.target.value;
+    setSignUpFullName(name);
+    generateEmailFromName(name);
+  };
+
   // Handle email input with auto-append @kku.edu.sa
   const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -385,7 +438,7 @@ export function LoginPage({ onBack }: LoginPageProps) {
                             type="text"
                             placeholder=""
                             value={signUpFullName}
-                            onChange={(e) => setSignUpFullName(e.target.value)}
+                            onChange={handleFullNameChange}
                             required
                             disabled={isLoading}
                             className="h-14 text-base border-2 focus:border-primary"

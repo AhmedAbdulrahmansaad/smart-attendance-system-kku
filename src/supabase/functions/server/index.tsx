@@ -2,7 +2,6 @@ import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import * as kv from "./kv_store.tsx";
 
 const app = new Hono();
 
@@ -21,82 +20,84 @@ app.use(
   }),
 );
 
-// Helper to get authenticated user
+// Create Supabase client helper
+function getSupabaseClient(useServiceRole = false) {
+  const url = Deno.env.get('SUPABASE_URL')!;
+  const key = useServiceRole 
+    ? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    : Deno.env.get('SUPABASE_ANON_KEY')!;
+  
+  return createClient(url, key);
+}
+
+// Helper to get authenticated user from SQL database
 async function getAuthenticatedUser(request: Request) {
   const accessToken = request.headers.get('Authorization')?.split(' ')[1];
   if (!accessToken) {
     return { error: 'Missing authorization token', user: null };
   }
   
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_ANON_KEY')!,
-  );
+  const supabase = getSupabaseClient();
   
   const { data, error } = await supabase.auth.getUser(accessToken);
   if (error || !data.user) {
     return { error: 'Unauthorized', user: null };
   }
   
-  // Get user role from KV store
-  let userRecord = await kv.get(`user:${data.user.id}`);
+  // Get user profile from SQL database
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', data.user.id)
+    .single();
   
-  // If user doesn't exist in KV store, create it from user_metadata (just like /me endpoint)
-  if (!userRecord) {
-    console.log('🔧 [getAuthenticatedUser] User not found in KV, creating from metadata:', data.user.id);
-    
-    const metadata = data.user.user_metadata || {};
-    userRecord = {
-      id: data.user.id,
-      email: data.user.email || '',
-      full_name: metadata.full_name || metadata.name || 'User',
-      role: metadata.role || 'student',
-      university_id: metadata.university_id || null,
-      created_at: new Date().toISOString(),
-      active_session: null
-    };
-    
-    await kv.set(`user:${data.user.id}`, userRecord);
-    console.log('✅ [getAuthenticatedUser] User created in KV store:', userRecord.email);
+  if (profileError || !profile) {
+    console.log('❌ Profile not found for user:', data.user.id);
+    return { error: 'Profile not found', user: null };
   }
   
-  return { error: null, user: { ...data.user, ...userRecord } };
+  return { error: null, user: profile };
 }
 
-// Helper to generate random code
+// Helper to generate random session code
 function generateSessionCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
-// Helper to hash password (basic implementation)
-async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ==================== AUTH ENDPOINTS ====================
 
 // Health check endpoint
-app.get("/server/health", async (c) => {
+app.get("/make-server-90ad488b/health", async (c) => {
   try {
-    // Check if KV store is accessible
-    const testKey = 'health_check_test';
-    await kv.set(testKey, { timestamp: Date.now() });
-    const testValue = await kv.get(testKey);
-    await kv.del(testKey);
+    const supabase = getSupabaseClient();
+    
+    // Test database connection
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('count')
+      .limit(1);
+    
+    if (error) {
+      console.log('❌ Database connection failed:', error);
+      return c.json({
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        database: false,
+        message: 'Database connection failed',
+        messageAr: 'فشل الاتصال بقاعدة البيانات',
+        error: error.message
+      }, 500);
+    }
     
     return c.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
-      database: testValue ? true : false,
-      message: 'Backend is running correctly',
-      messageAr: 'الخادم يعمل بشكل صحيح'
+      database: true,
+      message: 'Backend is running correctly with SQL database',
+      messageAr: 'الخادم يعمل بشكل صحيح مع قاعدة البيانات'
     });
   } catch (error) {
-    console.log('Health check error:', error);
+    console.log('❌ Health check error:', error);
     return c.json({
       status: 'unhealthy',
       timestamp: new Date().toISOString(),
@@ -109,39 +110,63 @@ app.get("/server/health", async (c) => {
 });
 
 // Sign up endpoint
-app.post("/server/signup", async (c) => {
+app.post("/make-server-90ad488b/signup", async (c) => {
   try {
-    const { email, password, full_name, role, university_id } = await c.req.json();
+    const body = await c.req.json();
+    const { email, password, full_name, role, university_id } = body;
     
+    // Validate required fields
     if (!email || !password || !full_name || !role) {
-      return c.json({ error: 'Missing required fields' }, 400);
+      return c.json({ 
+        error: 'Missing required fields',
+        messageAr: 'جميع الحقول مطلوبة'
+      }, 400);
     }
     
-    // Validate email domain
+    // Validate email format (must be @kku.edu.sa)
     if (!email.endsWith('@kku.edu.sa')) {
-      return c.json({ error: 'Must use university email @kku.edu.sa' }, 400);
+      return c.json({ 
+        error: 'Email must be a valid KKU email (@kku.edu.sa)',
+        messageAr: 'يجب أن يكون البريد الإلكتروني من جامعة الملك خالد (@kku.edu.sa)'
+      }, 400);
     }
     
-    if (!['student', 'instructor', 'admin', 'supervisor'].includes(role)) {
-      return c.json({ error: 'Invalid role' }, 400);
+    // Validate role
+    const validRoles = ['admin', 'instructor', 'student', 'supervisor'];
+    if (!validRoles.includes(role)) {
+      return c.json({ 
+        error: 'Invalid role',
+        messageAr: 'الدور غير صحيح'
+      }, 400);
     }
-
-    // Validate university_id for students
+    
+    // Validate student-specific fields
     if (role === 'student') {
       if (!university_id) {
-        return c.json({ error: 'University ID is required for students' }, 400);
+        return c.json({ 
+          error: 'University ID is required for students',
+          messageAr: 'الرقم الجامعي مطلوب للطلاب'
+        }, 400);
       }
       
       // Validate university ID format: 9 digits starting with 44
       const universityIdRegex = /^44\d{7}$/;
       if (!universityIdRegex.test(university_id)) {
-        return c.json({ error: 'University ID must be 9 digits starting with 44 (e.g., 441234567)' }, 400);
+        return c.json({ 
+          error: 'University ID must be 9 digits starting with 44 (e.g., 441234567)',
+          messageAr: 'الرقم الجامعي يجب أن يكون 9 أرقام تبدأ بـ 44 (مثال: 441234567)'
+        }, 400);
       }
       
-      // Check if university ID already exists
-      const existingUsers = await kv.getByPrefix('user:');
-      const duplicateId = existingUsers.find((u: any) => u.university_id === university_id);
-      if (duplicateId) {
+      // Check if university ID already exists in SQL database
+      const supabase = getSupabaseClient();
+      const { data: existingProfile, error: checkError } = await supabase
+        .from('profiles')
+        .select('university_id')
+        .eq('university_id', university_id)
+        .single();
+      
+      if (existingProfile && !checkError) {
         console.log(`❌ Signup failed: University ID already registered - ${university_id}`);
         return c.json({ 
           error: 'University ID already registered',
@@ -151,16 +176,18 @@ app.post("/server/signup", async (c) => {
       }
     }
     
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    );
+    const supabase = getSupabaseClient(true); // Use service role for auth admin
     
-    // Check if email already exists
-    const { data: existingUsers } = await supabase.auth.admin.listUsers();
-    const emailExists = existingUsers?.users?.some(u => u.email === email);
-    if (emailExists) {
-      console.log(`❌ Signup failed: Email already registered - ${email}`);
+    // First, check if email already exists in profiles table
+    console.log('🔍 Checking if email exists in profiles...');
+    const { data: existingEmailProfile } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .eq('email', email)
+      .single();
+    
+    if (existingEmailProfile) {
+      console.log(`❌ Signup failed: Email already exists in profiles - ${email}`);
       return c.json({ 
         error: 'Email already registered',
         message: 'This email is already registered. Please use Sign In instead.',
@@ -169,43 +196,99 @@ app.post("/server/signup", async (c) => {
     }
     
     // Create user in Supabase Auth
-    const { data, error } = await supabase.auth.admin.createUser({
+    console.log('🔐 Creating user in Auth...');
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
       email_confirm: true, // Auto-confirm since email server hasn't been configured
       user_metadata: { full_name, role, university_id: university_id || null }
     });
     
-    if (error) {
-      console.log('Signup error:', error);
-      return c.json({ error: error.message }, 400);
+    if (authError) {
+      console.log('❌ Auth error:', authError);
+      
+      // Check if email already exists
+      if (authError.message.includes('already registered') || authError.message.includes('already exists') || authError.message.includes('User already registered')) {
+        return c.json({ 
+          error: 'Email already registered',
+          message: 'This email is already registered. Please use Sign In instead.',
+          messageAr: 'هذا البريد مسجل مسبقاً. الرجاء استخدام تسجيل الدخول.'
+        }, 400);
+      }
+      
+      return c.json({ error: authError.message }, 400);
     }
     
-    // Store user in KV store
-    const userRecord = {
-      id: data.user.id,
-      email,
-      full_name,
-      role,
-      university_id: university_id || null,
-      created_at: new Date().toISOString(),
-      active_session: null // For session management
-    };
+    console.log('✅ User created in Auth:', authData.user.id);
     
-    await kv.set(`user:${data.user.id}`, userRecord);
+    // Create profile in SQL database
+    console.log('💾 Creating profile in database...');
+    const { data: profileData, error: profileError } = await supabase
+      .from('profiles')
+      .insert({
+        id: authData.user.id,
+        email,
+        full_name,
+        role,
+        university_id: university_id || null
+      })
+      .select()
+      .single();
+    
+    if (profileError) {
+      console.log('❌ Profile creation error:', profileError);
+      
+      // Check if it's a duplicate key error
+      if (profileError.message.includes('duplicate key') || profileError.code === '23505') {
+        console.log('⚠️ Profile already exists, attempting to fetch existing profile...');
+        
+        // Try to get the existing profile
+        const { data: existingProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authData.user.id)
+          .single();
+        
+        if (existingProfile) {
+          console.log('✅ Found existing profile, returning it');
+          return c.json({ 
+            message: 'User profile retrieved successfully',
+            messageAr: 'تم استرجاع الحساب بنجاح',
+            user: existingProfile
+          });
+        }
+      }
+      
+      // If profile creation fails and we can't find existing, delete the auth user
+      console.log('🗑️ Deleting auth user due to profile creation failure...');
+      await supabase.auth.admin.deleteUser(authData.user.id);
+      
+      return c.json({ 
+        error: 'Failed to create profile',
+        details: profileError.message,
+        messageAr: 'فشل إنشاء الملف الشخصي'
+      }, 500);
+    }
+    
+    console.log('✅ Profile created successfully:', profileData);
     
     return c.json({ 
       message: 'User created successfully',
-      user: userRecord
+      messageAr: 'تم إنشاء الحساب بنجاح',
+      user: profileData
     });
   } catch (error) {
-    console.log('Signup error:', error);
-    return c.json({ error: 'Internal server error during signup' }, 500);
+    console.log('❌ Signup error:', error);
+    return c.json({ 
+      error: 'Internal server error during signup',
+      details: error instanceof Error ? error.message : 'Unknown error',
+      messageAr: 'حدث خطأ داخلي أثناء التسجيل'
+    }, 500);
   }
 });
 
-// Sign in endpoint (for reference, actual sign-in happens on frontend)
-app.get("/server/me", async (c) => {
+// Get current user endpoint
+app.get("/make-server-90ad488b/me", async (c) => {
   try {
     const accessToken = c.req.header('Authorization')?.split(' ')[1];
     
@@ -213,198 +296,315 @@ app.get("/server/me", async (c) => {
       return c.json({ error: 'Missing authorization token' }, 401);
     }
     
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-    );
+    const supabase = getSupabaseClient();
     
     const { data, error } = await supabase.auth.getUser(accessToken);
     
     if (error || !data.user) {
-      console.log('Auth error in /me:', error);
+      console.log('❌ Auth error in /me:', error);
       return c.json({ error: 'Unauthorized - Invalid token' }, 401);
     }
     
-    // Try to get user record from KV store
-    let userRecord = await kv.get(`user:${data.user.id}`);
+    // Get user profile from SQL database
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', data.user.id)
+      .single();
     
-    // If user doesn't exist in KV store, create it from user_metadata
-    if (!userRecord) {
-      console.log('User not found in KV, creating from metadata:', data.user.id);
+    if (profileError || !profile) {
+      console.log('❌ Profile not found for user:', data.user.id);
       
+      // Try to create profile from user_metadata
       const metadata = data.user.user_metadata || {};
-      userRecord = {
-        id: data.user.id,
-        email: data.user.email || '',
-        full_name: metadata.full_name || metadata.name || 'User',
-        role: metadata.role || 'student',
-        university_id: metadata.university_id || null,
-        created_at: new Date().toISOString()
-      };
       
-      await kv.set(`user:${data.user.id}`, userRecord);
+      const { data: newProfile, error: createError } = await supabase
+        .from('profiles')
+        .insert({
+          id: data.user.id,
+          email: data.user.email || '',
+          full_name: metadata.full_name || metadata.name || 'User',
+          role: metadata.role || 'student',
+          university_id: metadata.university_id || null
+        })
+        .select()
+        .single();
+      
+      if (createError) {
+        console.log('❌ Failed to create profile:', createError);
+        return c.json({ error: 'Profile not found and creation failed' }, 404);
+      }
+      
+      return c.json({ user: newProfile });
     }
     
-    return c.json({ user: userRecord });
+    return c.json({ user: profile });
   } catch (error) {
-    console.log('Get user error:', error);
-    return c.json({ error: 'Internal server error while fetching user' }, 500);
+    console.log('❌ Get user error:', error);
+    return c.json({ 
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
   }
 });
 
-// Session management - check and register session
-app.post("/server/session/register", async (c) => {
+// ==================== STATS ENDPOINTS ====================
+
+// Public stats endpoint for landing page
+app.get("/make-server-90ad488b/stats/public", async (c) => {
   try {
-    const accessToken = c.req.header('Authorization')?.split(' ')[1];
+    const supabase = getSupabaseClient();
     
-    if (!accessToken) {
-      return c.json({ error: 'Missing authorization token' }, 401);
+    // Get students count
+    const { count: studentsCount } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('role', 'student');
+    
+    // Get instructors count
+    const { count: instructorsCount } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('role', 'instructor');
+    
+    // Get courses count
+    const { count: coursesCount } = await supabase
+      .from('courses')
+      .select('*', { count: 'exact', head: true });
+    
+    // Calculate attendance rate
+    const { data: attendanceData } = await supabase
+      .from('attendance')
+      .select('status');
+    
+    let attendanceRate = 99.8;
+    if (attendanceData && attendanceData.length > 0) {
+      const presentCount = attendanceData.filter(a => a.status === 'present').length;
+      attendanceRate = (presentCount / attendanceData.length) * 100;
     }
     
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-    );
+    console.log('📊 Public stats:', { studentsCount, instructorsCount, coursesCount, attendanceRate });
     
-    const { data, error } = await supabase.auth.getUser(accessToken);
-    
-    if (error || !data.user) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
-    
-    const userId = data.user.id;
-    const sessionId = crypto.randomUUID();
-    const timestamp = new Date().toISOString();
-    
-    // Get user record
-    const userRecord = await kv.get(`user:${userId}`);
-    if (!userRecord) {
-      return c.json({ error: 'User not found' }, 404);
-    }
-    
-    // Check if there's an active session
-    if (userRecord.active_session) {
-      const sessionAge = Date.now() - new Date(userRecord.active_session.timestamp).getTime();
-      // If session is less than 30 seconds old, it's likely the same login
-      if (sessionAge < 30000) {
-        return c.json({ 
-          session_id: userRecord.active_session.session_id,
-          message: 'Session already registered'
-        });
+    return c.json({
+      stats: {
+        studentsCount: studentsCount || 0,
+        instructorsCount: instructorsCount || 0,
+        coursesCount: coursesCount || 0,
+        attendanceRate: Number(attendanceRate.toFixed(1))
       }
-      
-      // Check if session is still valid (less than 12 hours old)
-      if (sessionAge < 12 * 60 * 60 * 1000) {
-        return c.json({ 
-          error: 'Another session is active. Please logout from other device first.',
-          session_conflict: true
-        }, 409);
-      }
-    }
-    
-    // Register new session
-    userRecord.active_session = {
-      session_id: sessionId,
-      timestamp,
-      access_token: accessToken
-    };
-    
-    await kv.set(`user:${userId}`, userRecord);
-    
-    return c.json({ 
-      session_id: sessionId,
-      message: 'Session registered successfully'
     });
   } catch (error) {
-    console.log('Session register error:', error);
-    return c.json({ error: 'Internal server error while registering session' }, 500);
+    console.log('❌ Stats error:', error);
+    return c.json({
+      stats: {
+        studentsCount: 0,
+        instructorsCount: 0,
+        coursesCount: 0,
+        attendanceRate: 99.8
+      }
+    });
   }
 });
 
-// Session management - logout
-app.post("/server/session/logout", async (c) => {
+// Dashboard stats endpoint (Admin, Instructor, Supervisor)
+app.get("/make-server-90ad488b/stats/dashboard", async (c) => {
   try {
-    const accessToken = c.req.header('Authorization')?.split(' ')[1];
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (!accessToken) {
-      return c.json({ error: 'Missing authorization token' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-    );
+    const supabase = getSupabaseClient();
     
-    const { data, error } = await supabase.auth.getUser(accessToken);
+    // Get total counts
+    const { count: totalUsers } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true });
     
-    if (error || !data.user) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
+    const { count: totalStudents } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('role', 'student');
     
-    const userId = data.user.id;
+    const { count: totalInstructors } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('role', 'instructor');
     
-    // Get user record
-    const userRecord = await kv.get(`user:${userId}`);
-    if (userRecord) {
-      // Clear active session
-      userRecord.active_session = null;
-      await kv.set(`user:${userId}`, userRecord);
-    }
+    const { count: totalCourses } = await supabase
+      .from('courses')
+      .select('*', { count: 'exact', head: true });
     
-    return c.json({ message: 'Session cleared successfully' });
+    const { count: totalSessions } = await supabase
+      .from('sessions')
+      .select('*', { count: 'exact', head: true });
+    
+    // Get today's date range
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    // Get active sessions today
+    const { count: activeSessionsToday } = await supabase
+      .from('sessions')
+      .select('*', { count: 'exact', head: true })
+      .eq('active', true)
+      .gte('created_at', today.toISOString())
+      .lt('created_at', tomorrow.toISOString());
+    
+    // Get today's attendance
+    const { data: todayAttendance } = await supabase
+      .from('attendance')
+      .select('status')
+      .gte('timestamp', today.toISOString())
+      .lt('timestamp', tomorrow.toISOString());
+    
+    const presentToday = todayAttendance?.filter(a => a.status === 'present').length || 0;
+    const absentToday = todayAttendance?.filter(a => a.status === 'absent').length || 0;
+    const totalToday = todayAttendance?.length || 0;
+    const attendanceRateToday = totalToday > 0 ? (presentToday / totalToday) * 100 : 0;
+    
+    console.log('📊 Dashboard stats:', {
+      totalUsers,
+      totalStudents,
+      totalInstructors,
+      totalCourses,
+      totalSessions,
+      activeSessionsToday,
+      attendanceRateToday
+    });
+    
+    return c.json({
+      totalUsers: totalUsers || 0,
+      totalStudents: totalStudents || 0,
+      totalInstructors: totalInstructors || 0,
+      totalCourses: totalCourses || 0,
+      totalSessions: totalSessions || 0,
+      activeSessionsToday: activeSessionsToday || 0,
+      attendanceRateToday: Number(attendanceRateToday.toFixed(1)),
+      presentToday,
+      absentToday
+    });
   } catch (error) {
-    console.log('Session logout error:', error);
-    return c.json({ error: 'Internal server error while logging out' }, 500);
+    console.log('❌ Dashboard stats error:', error);
+    return c.json({
+      totalUsers: 0,
+      totalStudents: 0,
+      totalInstructors: 0,
+      totalCourses: 0,
+      totalSessions: 0,
+      activeSessionsToday: 0,
+      attendanceRateToday: 0,
+      presentToday: 0,
+      absentToday: 0
+    });
   }
 });
 
-// ==================== USER MANAGEMENT (ADMIN) ====================
+// ==================== ADMIN ENDPOINTS ====================
 
-app.delete("/server/users/:userId", async (c) => {
+// Get all users (Admin only)
+app.get("/make-server-90ad488b/users", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
     if (user.role !== 'admin') {
-      return c.json({ error: 'Admin access required' }, 403);
+      return c.json({ error: 'Forbidden - Admin access required' }, 403);
     }
     
-    const userId = c.req.param('userId');
+    const supabase = getSupabaseClient();
     
-    // Delete from Supabase Auth
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    );
+    const { data: profiles, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
     
-    await supabase.auth.admin.deleteUser(userId);
+    if (error) {
+      console.log('❌ Error fetching users:', error);
+      return c.json({ error: error.message }, 500);
+    }
     
-    // Delete from KV store
-    await kv.del(`user:${userId}`);
-    
-    return c.json({ message: 'User deleted successfully' });
+    return c.json({ users: profiles || [] });
   } catch (error) {
-    console.log('Delete user error:', error);
-    return c.json({ error: 'Internal server error while deleting user' }, 500);
+    console.log('❌ Get users error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-// ==================== COURSE MANAGEMENT ====================
-
-app.post("/server/courses", async (c) => {
+// Get courses (accessible by all authenticated users)
+app.get("/make-server-90ad488b/courses", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
-    // Allow both admin and instructor to create courses
+    const supabase = getSupabaseClient();
+    
+    let query = supabase
+      .from('courses')
+      .select(`
+        *,
+        instructor:instructor_id (
+          id,
+          full_name,
+          email
+        )
+      `);
+    
+    // If instructor, only show their courses
+    if (user.role === 'instructor') {
+      query = query.eq('instructor_id', user.id);
+    }
+    
+    // If student, show enrolled courses
+    if (user.role === 'student') {
+      const { data: enrollments } = await supabase
+        .from('enrollments')
+        .select('course_id')
+        .eq('student_id', user.id);
+      
+      const courseIds = enrollments?.map(e => e.course_id) || [];
+      
+      if (courseIds.length > 0) {
+        query = query.in('id', courseIds);
+      } else {
+        return c.json({ courses: [] });
+      }
+    }
+    
+    const { data: courses, error } = await query.order('created_at', { ascending: false });
+    
+    if (error) {
+      console.log('❌ Error fetching courses:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    return c.json({ courses: courses || [] });
+  } catch (error) {
+    console.log('❌ Get courses error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Create course (Admin or Instructor)
+app.post("/make-server-90ad488b/courses", async (c) => {
+  try {
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
+    }
+    
     if (user.role !== 'admin' && user.role !== 'instructor') {
-      return c.json({ error: 'Admin or Instructor access required' }, 403);
+      return c.json({ error: 'Forbidden - Admin or Instructor access required' }, 403);
     }
     
     const { course_name, course_code, instructor_id } = await c.req.json();
@@ -413,1953 +613,754 @@ app.post("/server/courses", async (c) => {
       return c.json({ error: 'Missing required fields' }, 400);
     }
     
-    // If instructor creates course, automatically assign them as instructor
-    const finalInstructorId = user.role === 'instructor' ? user.id : (instructor_id || null);
+    const supabase = getSupabaseClient();
     
-    const courseId = `course_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const course = {
-      id: courseId,
-      course_name,
-      course_code,
-      instructor_id: finalInstructorId,
-      created_at: new Date().toISOString()
-    };
-    
-    await kv.set(`course:${courseId}`, course);
-    
-    return c.json({ message: 'Course created successfully', course });
-  } catch (error) {
-    console.log('Create course error:', error);
-    return c.json({ error: 'Internal server error while creating course' }, 500);
-  }
-});
-
-app.get("/server/courses", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    const courses = await kv.getByPrefix('course:');
-    
-    // Filter by role
-    if (user.role === 'instructor') {
-      const instructorCourses = courses.filter(course => course.instructor_id === user.id);
-      return c.json({ courses: instructorCourses });
-    }
-    
-    if (user.role === 'student') {
-      // Get enrolled courses
-      const enrollments = await kv.getByPrefix(`enrollment:${user.id}:`);
-      const enrolledCourseIds = enrollments.map(e => e.course_id);
-      const enrolledCourses = courses.filter(course => enrolledCourseIds.includes(course.id));
-      return c.json({ courses: enrolledCourses });
-    }
-    
-    return c.json({ courses });
-  } catch (error) {
-    console.log('Get courses error:', error);
-    return c.json({ error: 'Internal server error while fetching courses' }, 500);
-  }
-});
-
-app.put("/server/courses/:courseId", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'admin') {
-      return c.json({ error: 'Admin access required' }, 403);
-    }
-    
-    const courseId = c.req.param('courseId');
-    const updates = await c.req.json();
-    
-    const existingCourse = await kv.get(`course:${courseId}`);
-    if (!existingCourse) {
-      return c.json({ error: 'Course not found' }, 404);
-    }
-    
-    const updatedCourse = { ...existingCourse, ...updates };
-    await kv.set(`course:${courseId}`, updatedCourse);
-    
-    return c.json({ message: 'Course updated successfully', course: updatedCourse });
-  } catch (error) {
-    console.log('Update course error:', error);
-    return c.json({ error: 'Internal server error while updating course' }, 500);
-  }
-});
-
-app.delete("/server/courses/:courseId", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    const courseId = c.req.param('courseId');
-    const existingCourse = await kv.get(`course:${courseId}`);
-    
-    if (!existingCourse) {
-      return c.json({ error: 'Course not found' }, 404);
-    }
-    
-    // Allow admin to delete any course, or instructor to delete their own courses
-    if (user.role !== 'admin' && existingCourse.instructor_id !== user.id) {
-      return c.json({ error: 'You can only delete your own courses' }, 403);
-    }
-    
-    // Delete all related data
-    // 1. Delete enrollments
-    const enrollments = await kv.getByPrefix(`enrollment:`);
-    const courseEnrollments = enrollments.filter(e => e.course_id === courseId);
-    for (const enrollment of courseEnrollments) {
-      await kv.del(`enrollment:${enrollment.student_id}:${courseId}`);
-    }
-    
-    // 2. Delete sessions
-    const sessions = await kv.getByPrefix(`session:`);
-    const courseSessions = sessions.filter(s => s.course_id === courseId);
-    for (const session of courseSessions) {
-      await kv.del(`session:${session.id}`);
-      if (session.code) {
-        await kv.del(`session_code:${session.code}`);
-      }
-    }
-    
-    // 3. Delete attendance records
-    const attendanceRecords = await kv.getByPrefix(`attendance:`);
-    const courseAttendance = attendanceRecords.filter(a => a.course_id === courseId);
-    for (const record of courseAttendance) {
-      await kv.del(`attendance:${record.id}`);
-    }
-    
-    // 4. Finally delete the course
-    await kv.del(`course:${courseId}`);
-    
-    console.log(`Course ${courseId} deleted successfully by ${user.full_name} (${user.role})`);
-    
-    return c.json({ message: 'Course deleted successfully' });
-  } catch (error) {
-    console.log('Delete course error:', error);
-    return c.json({ error: 'Internal server error while deleting course' }, 500);
-  }
-});
-
-// ==================== ENROLLMENT ====================
-
-app.post("/server/enrollments", async (c) => {
-  try {
-    console.log('📝 POST /enrollments - Enrollment request received');
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      console.log('❌ Enrollment error: Unauthorized');
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'admin') {
-      console.log('❌ Enrollment error: Not admin');
-      return c.json({ error: 'Admin access required' }, 403);
-    }
-    
-    const { student_id, course_id } = await c.req.json();
-    
-    if (!student_id || !course_id) {
-      console.log('❌ Enrollment error: Missing fields');
-      return c.json({ error: 'Missing required fields' }, 400);
-    }
-    
-    const enrollment = {
-      student_id,
-      course_id,
-      enrolled_at: new Date().toISOString()
-    };
-    
-    console.log('💾 Saving enrollment to KV store:', { 
-      key: `enrollment:${student_id}:${course_id}`,
-      value: enrollment 
-    });
-    
-    await kv.set(`enrollment:${student_id}:${course_id}`, enrollment);
-    
-    console.log('✅ Enrollment saved successfully! This should trigger Realtime update for student:', student_id);
-    
-    return c.json({ message: 'Student enrolled successfully', enrollment });
-  } catch (error) {
-    console.log('❌ Create enrollment error:', error);
-    return c.json({ error: 'Internal server error while creating enrollment' }, 500);
-  }
-});
-
-app.get("/server/enrollments/:courseId", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    const courseId = c.req.param('courseId');
-    const allEnrollments = await kv.getByPrefix('enrollment:');
-    const courseEnrollments = allEnrollments.filter(e => e.course_id === courseId);
-    
-    // Get student details
-    const studentsWithDetails = await Promise.all(
-      courseEnrollments.map(async (enrollment) => {
-        const student = await kv.get(`user:${enrollment.student_id}`);
-        return {
-          ...enrollment,
-          student
-        };
+    const { data: course, error } = await supabase
+      .from('courses')
+      .insert({
+        course_name,
+        course_code,
+        instructor_id: instructor_id || (user.role === 'instructor' ? user.id : null)
       })
-    );
+      .select()
+      .single();
     
-    return c.json({ enrollments: studentsWithDetails });
+    if (error) {
+      console.log('❌ Error creating course:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    return c.json({ course });
   } catch (error) {
-    console.log('Get enrollments error:', error);
-    return c.json({ error: 'Internal server error while fetching enrollments' }, 500);
+    console.log('❌ Create course error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-// ==================== SCHEDULE MANAGEMENT ====================
+// ==================== SESSION ENDPOINTS ====================
 
-app.post("/server/schedules", async (c) => {
+// Get sessions
+app.get("/make-server-90ad488b/sessions", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
-    if (user.role !== 'admin' && user.role !== 'instructor') {
-      return c.json({ error: 'Instructor or Admin access required' }, 403);
+    const supabase = getSupabaseClient();
+    
+    const { data: sessions, error } = await supabase
+      .from('sessions')
+      .select(`
+        *,
+        course:course_id (
+          id,
+          course_name,
+          course_code
+        ),
+        creator:created_by (
+          id,
+          full_name
+        )
+      `)
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.log('❌ Error fetching sessions:', error);
+      return c.json({ error: error.message }, 500);
     }
     
-    const { course_id, day_of_week, start_time, end_time, location } = await c.req.json();
-    
-    if (!course_id || !day_of_week || !start_time || !end_time) {
-      return c.json({ error: 'Missing required fields' }, 400);
-    }
-    
-    const scheduleId = `schedule_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const schedule = {
-      id: scheduleId,
-      course_id,
-      day_of_week,
-      start_time,
-      end_time,
-      location: location || '',
-      created_at: new Date().toISOString()
-    };
-    
-    await kv.set(`schedule:${scheduleId}`, schedule);
-    
-    return c.json({ message: 'Schedule created successfully', schedule });
+    return c.json({ sessions: sessions || [] });
   } catch (error) {
-    console.log('Create schedule error:', error);
-    return c.json({ error: 'Internal server error while creating schedule' }, 500);
+    console.log('❌ Get sessions error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-app.get("/server/schedules", async (c) => {
+// Create session (Instructor only)
+app.post("/make-server-90ad488b/sessions", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
-    const schedules = await kv.getByPrefix('schedule:');
-    
-    // Get course details for each schedule
-    const schedulesWithCourses = await Promise.all(
-      schedules.map(async (schedule) => {
-        const course = await kv.get(`course:${schedule.course_id}`);
-        return {
-          ...schedule,
-          course
-        };
-      })
-    );
-    
-    // Filter by role
-    if (user.role === 'instructor') {
-      const instructorSchedules = schedulesWithCourses.filter(s => s.course?.instructor_id === user.id);
-      return c.json({ schedules: instructorSchedules });
+    if (user.role !== 'instructor' && user.role !== 'admin') {
+      return c.json({ error: 'Forbidden - Instructor access required' }, 403);
     }
     
-    if (user.role === 'student') {
-      const enrollments = await kv.getByPrefix(`enrollment:${user.id}:`);
-      const enrolledCourseIds = enrollments.map(e => e.course_id);
-      const studentSchedules = schedulesWithCourses.filter(s => enrolledCourseIds.includes(s.course_id));
-      return c.json({ schedules: studentSchedules });
-    }
-    
-    return c.json({ schedules: schedulesWithCourses });
-  } catch (error) {
-    console.log('Get schedules error:', error);
-    return c.json({ error: 'Internal server error while fetching schedules' }, 500);
-  }
-});
-
-app.delete("/server/schedules/:scheduleId", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'admin' && user.role !== 'instructor') {
-      return c.json({ error: 'Instructor or Admin access required' }, 403);
-    }
-    
-    const scheduleId = c.req.param('scheduleId');
-    await kv.del(`schedule:${scheduleId}`);
-    
-    return c.json({ message: 'Schedule deleted successfully' });
-  } catch (error) {
-    console.log('Delete schedule error:', error);
-    return c.json({ error: 'Internal server error while deleting schedule' }, 500);
-  }
-});
-
-// ==================== SESSION MANAGEMENT (ATTENDANCE CODES) ====================
-
-app.post("/server/sessions", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'instructor') {
-      return c.json({ error: 'Instructor access required' }, 403);
-    }
-    
-    const { course_id, duration_minutes, session_type, title, description } = await c.req.json();
+    const { course_id, duration, session_type, title, description } = await c.req.json();
     
     if (!course_id) {
       return c.json({ error: 'Missing course_id' }, 400);
     }
     
-    // Verify instructor teaches this course
-    const course = await kv.get(`course:${course_id}`);
-    if (!course || course.instructor_id !== user.id) {
-      return c.json({ error: 'You are not authorized to create sessions for this course' }, 403);
-    }
-    
     const code = generateSessionCode();
-    const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + (duration_minutes || 15));
+    const expiresAt = new Date(Date.now() + (duration || 30) * 60 * 1000); // Default 30 minutes
     
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const session = {
-      id: sessionId,
-      course_id,
-      code,
-      created_by: user.id,
-      created_at: new Date().toISOString(),
-      expires_at: expiresAt.toISOString(),
-      active: true,
-      session_type: session_type || 'attendance', // 'attendance' or 'live'
-      title: title || null,
-      description: description || null,
-      stream_active: false,
-      viewers_count: 0
-    };
+    const supabase = getSupabaseClient();
     
-    await kv.set(`session:${sessionId}`, session);
-    await kv.set(`session_code:${code}`, sessionId);
+    const { data: session, error } = await supabase
+      .from('sessions')
+      .insert({
+        course_id,
+        code,
+        created_by: user.id,
+        expires_at: expiresAt.toISOString(),
+        session_type: session_type || 'attendance',
+        title,
+        description,
+        active: true
+      })
+      .select(`
+        *,
+        course:course_id (
+          id,
+          course_name,
+          course_code
+        )
+      `)
+      .single();
     
-    return c.json({ message: 'Session created successfully', session });
+    if (error) {
+      console.log('❌ Error creating session:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    console.log('✅ Session created:', session);
+    
+    return c.json({ session });
   } catch (error) {
-    console.log('Create session error:', error);
-    return c.json({ error: 'Internal server error while creating session' }, 500);
+    console.log('❌ Create session error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-app.get("/server/sessions/:courseId", async (c) => {
+// Submit attendance
+app.post("/make-server-90ad488b/attendance", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    const courseId = c.req.param('courseId');
-    const allSessions = await kv.getByPrefix('session:');
-    const courseSessions = allSessions.filter(s => s.course_id === courseId);
-    
-    return c.json({ sessions: courseSessions });
-  } catch (error) {
-    console.log('Get sessions error:', error);
-    return c.json({ error: 'Internal server error while fetching sessions' }, 500);
-  }
-});
-
-// Get all active live sessions for students
-app.get("/server/sessions", async (c) => {
-  try {
-    console.log('==================================================');
-    console.log('📡 GET /sessions - Fetching all active live sessions');
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      console.log('❌ Authentication error:', error);
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    console.log('✅ User authenticated:', { id: user.id, role: user.role, name: user.full_name });
-    
-    // Get all courses
-    const allCourses = await kv.getByPrefix('course:');
-    console.log('📚 Total courses in database:', allCourses.length);
-    if (allCourses.length > 0) {
-      console.log('📚 Sample course:', allCourses[0]);
-    }
-    
-    // Filter courses based on user role
-    let userCourses = [];
-    if (user.role === 'student') {
-      // Get enrolled courses for student
-      const enrollments = await kv.getByPrefix(`enrollment:${user.id}:`);
-      console.log('🎓 Student enrollments found:', enrollments.length);
-      if (enrollments.length > 0) {
-        console.log('🎓 Sample enrollment:', enrollments[0]);
-      }
-      const enrolledCourseIds = enrollments.map(e => e.course_id);
-      console.log('🎓 Enrolled course IDs:', enrolledCourseIds);
-      userCourses = allCourses.filter(course => enrolledCourseIds.includes(course.id));
-      console.log('🎓 Student enrolled courses:', userCourses.length);
-    } else if (user.role === 'instructor') {
-      // Get courses taught by instructor
-      userCourses = allCourses.filter(course => course.instructor_id === user.id);
-      console.log('👨‍🏫 Instructor courses:', userCourses.length);
-    } else {
-      // Admin or supervisor can see all courses
-      userCourses = allCourses;
-      console.log('👑 All courses (admin/supervisor):', userCourses.length);
-    }
-    
-    // Get all sessions
-    const allSessions = await kv.getByPrefix('session:');
-    console.log('📋 Total sessions in database:', allSessions.length);
-    if (allSessions.length > 0) {
-      console.log('📋 Sample session:', allSessions[0]);
-    }
-    
-    // Filter active live sessions for user's courses
-    const now = new Date();
-    console.log('⏰ Current time:', now.toISOString());
-    
-    const activeLiveSessions = allSessions.filter(session => {
-      const expiresAt = new Date(session.expires_at);
-      const isNotExpired = expiresAt > now;
-      const isActive = session.active === true;
-      const isLive = session.session_type === 'live';
-      const isUserCourse = userCourses.some(c => c.id === session.course_id);
-      
-      console.log(`🔍 Session ${session.code}:`, {
-        id: session.id,
-        active: session.active,
-        type: session.session_type,
-        expires_at: session.expires_at,
-        isNotExpired,
-        isActive,
-        isLive,
-        isUserCourse,
-        course_id: session.course_id,
-        PASS: isActive && isLive && isUserCourse && isNotExpired ? '✅' : '❌'
-      });
-      
-      return isActive && isLive && isUserCourse && isNotExpired;
-    });
-    
-    console.log('🎥 Active live sessions for user:', activeLiveSessions.length);
-    if (activeLiveSessions.length > 0) {
-      console.log('🎥 Active live sessions list:', activeLiveSessions.map(s => ({
-        id: s.id,
-        code: s.code,
-        title: s.title,
-        course_id: s.course_id
-      })));
-    }
-    console.log('==================================================');
-    
-    return c.json({ 
-      data: {
-        sessions: activeLiveSessions,
-        courses: userCourses
-      }
-    });
-  } catch (error) {
-    console.log('❌ Get live sessions error:', error);
-    return c.json({ error: 'Internal server error while fetching live sessions' }, 500);
-  }
-});
-
-// Get all sessions (both regular and live) - for admin dashboard and reports
-app.get("/server/sessions/all", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    // Get all sessions from KV store
-    const allSessions = await kv.getByPrefix('session:');
-    
-    // Filter based on role
-    if (user.role === 'admin' || user.role === 'supervisor') {
-      // Admin and supervisor can see all sessions
-      return c.json({ sessions: allSessions });
-    } else if (user.role === 'instructor') {
-      // Instructor can see sessions for their courses
-      const courses = await kv.getByPrefix('course:');
-      const instructorCourses = courses.filter(c => c.instructor_id === user.id);
-      const courseIds = instructorCourses.map(c => c.id);
-      const instructorSessions = allSessions.filter(s => courseIds.includes(s.course_id));
-      return c.json({ sessions: instructorSessions });
-    } else if (user.role === 'student') {
-      // Students can see sessions for enrolled courses
-      const enrollments = await kv.getByPrefix(`enrollment:${user.id}:`);
-      const enrolledCourseIds = enrollments.map(e => e.course_id);
-      const studentSessions = allSessions.filter(s => enrolledCourseIds.includes(s.course_id));
-      return c.json({ sessions: studentSessions });
-    }
-    
-    return c.json({ sessions: [] });
-  } catch (error) {
-    console.log('Get all sessions error:', error);
-    return c.json({ error: 'Internal server error while fetching sessions' }, 500);
-  }
-});
-
-app.post("/server/sessions/:sessionId/deactivate", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'instructor') {
-      return c.json({ error: 'Instructor access required' }, 403);
-    }
-    
-    const sessionId = c.req.param('sessionId');
-    const session = await kv.get(`session:${sessionId}`);
-    
-    if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-    
-    if (session.created_by !== user.id) {
-      return c.json({ error: 'You are not authorized to deactivate this session' }, 403);
-    }
-    
-    session.active = false;
-    await kv.set(`session:${sessionId}`, session);
-    
-    return c.json({ message: 'Session deactivated successfully' });
-  } catch (error) {
-    console.log('Deactivate session error:', error);
-    return c.json({ error: 'Internal server error while deactivating session' }, 500);
-  }
-});
-
-// Delete session
-app.delete("/server/sessions/:sessionId", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'instructor') {
-      return c.json({ error: 'Instructor access required' }, 403);
-    }
-    
-    const sessionId = c.req.param('sessionId');
-    const session = await kv.get(`session:${sessionId}`);
-    
-    if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-    
-    if (session.created_by !== user.id) {
-      return c.json({ error: 'You are not authorized to delete this session' }, 403);
-    }
-    
-    // Delete session
-    await kv.del(`session:${sessionId}`);
-    
-    // Delete session code mapping
-    if (session.code) {
-      await kv.del(`session_code:${session.code}`);
-    }
-    
-    // Delete attendance records for this session
-    const allAttendance = await kv.getByPrefix('attendance:');
-    const sessionAttendance = allAttendance.filter(a => a.session_id === sessionId);
-    await Promise.all(sessionAttendance.map(a => kv.del(`attendance:${a.student_id}:${sessionId}`)));
-    
-    return c.json({ message: 'Session deleted successfully' });
-  } catch (error) {
-    console.log('Delete session error:', error);
-    return c.json({ error: 'Internal server error while deleting session' }, 500);
-  }
-});
-
-// ==================== ATTENDANCE ====================
-
-// Fingerprint Biometric Attendance (Real fingerprint verification)
-app.post("/server/fingerprint-attend", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
     if (user.role !== 'student') {
-      return c.json({ error: 'Student access required' }, 403);
+      return c.json({ error: 'Forbidden - Student access required' }, 403);
     }
     
-    const { student_id, verification_data } = await c.req.json();
-    
-    if (!verification_data || !verification_data.authenticatorData) {
-      return c.json({ error: 'Missing biometric verification data' }, 400);
-    }
-    
-    console.log('🔵 [Fingerprint] Biometric attendance request:', {
-      student_id,
-      verification_method: verification_data.verificationMethod,
-      timestamp: verification_data.timestamp
-    });
-    
-    // Verify the biometric data
-    if (verification_data.verificationMethod !== 'biometric_fingerprint') {
-      return c.json({ error: 'Invalid verification method' }, 400);
-    }
-    
-    // Log successful biometric verification
-    const attendanceId = `attendance_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const attendance = {
-      id: attendanceId,
-      student_id: user.id,
-      date: new Date().toISOString(),
-      status: 'present',
-      verification_method: 'biometric_fingerprint',
-      verification_data: {
-        timestamp: verification_data.timestamp,
-        checks: verification_data.checks,
-        authenticatorData: verification_data.authenticatorData.substring(0, 50) + '...' // Store partial for security
-      }
-    };
-    
-    // Store the attendance record
-    await kv.set(`biometric_attendance:${user.id}:${attendanceId}`, attendance);
-    
-    console.log('✅ [Fingerprint] Biometric attendance recorded successfully');
-    
-    return c.json({ 
-      success: true, 
-      message: 'Attendance marked with biometric verification',
-      attendance_id: attendanceId,
-      verification: 'Real fingerprint verified'
-    });
-    
-  } catch (err: any) {
-    console.error('❌ [Fingerprint] Error:', err);
-    return c.json({ error: err.message || 'Failed to process fingerprint attendance' }, 500);
-  }
-});
-
-app.post("/server/attendance", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'student') {
-      return c.json({ error: 'Student access required' }, 403);
-    }
-    
-    const { session_code } = await c.req.json();
+    const { session_code, device_fingerprint } = await c.req.json();
     
     if (!session_code) {
       return c.json({ error: 'Missing session code' }, 400);
     }
     
+    const supabase = getSupabaseClient();
+    
     // Find session by code
-    const sessionId = await kv.get(`session_code:${session_code.toUpperCase()}`);
-    if (!sessionId) {
-      return c.json({ error: 'Invalid session code' }, 400);
+    const { data: session, error: sessionError } = await supabase
+      .from('sessions')
+      .select('*')
+      .eq('code', session_code.toUpperCase())
+      .eq('active', true)
+      .single();
+    
+    if (sessionError || !session) {
+      return c.json({ 
+        error: 'Invalid or expired session code',
+        messageAr: 'رمز الجلسة غير صحيح أو منتهي الصلاحية'
+      }, 404);
     }
     
-    const session = await kv.get(`session:${sessionId}`);
-    if (!session || !session.active) {
-      return c.json({ error: 'Session is not active' }, 400);
-    }
-    
-    // Check if session expired
+    // Check if session is expired
     if (new Date(session.expires_at) < new Date()) {
-      return c.json({ error: 'Session has expired' }, 400);
+      return c.json({ 
+        error: 'Session has expired',
+        messageAr: 'انتهت صلاحية الجلسة'
+      }, 400);
     }
     
     // Check if student is enrolled in the course
-    const enrollment = await kv.get(`enrollment:${user.id}:${session.course_id}`);
-    if (!enrollment) {
-      return c.json({ error: 'You are not enrolled in this course' }, 403);
+    const { data: enrollment, error: enrollmentError } = await supabase
+      .from('enrollments')
+      .select('*')
+      .eq('student_id', user.id)
+      .eq('course_id', session.course_id)
+      .single();
+    
+    if (enrollmentError || !enrollment) {
+      return c.json({ 
+        error: 'You are not enrolled in this course',
+        messageAr: 'أنت غير مسجل في هذا المقرر'
+      }, 403);
     }
     
-    // Check if already marked attendance
-    const existingAttendance = await kv.get(`attendance:${user.id}:${sessionId}`);
-    if (existingAttendance) {
-      return c.json({ error: 'Attendance already recorded for this session' }, 400);
-    }
-    
-    const attendanceId = `attendance_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const attendance = {
-      id: attendanceId,
-      student_id: user.id,
-      course_id: session.course_id,
-      session_id: sessionId,
-      date: new Date().toISOString(),
-      status: 'present',
-      session_code: session_code.toUpperCase()
-    };
-    
-    await kv.set(`attendance:${user.id}:${sessionId}`, attendance);
-    await kv.set(`attendance_record:${attendanceId}`, attendance);
-    
-    return c.json({ message: 'Attendance recorded successfully', attendance });
-  } catch (error) {
-    console.log('Record attendance error:', error);
-    return c.json({ error: 'Internal server error while recording attendance' }, 500);
-  }
-});
-
-app.get("/server/attendance/student", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'student') {
-      return c.json({ error: 'Student access required' }, 403);
-    }
-    
-    const allAttendance = await kv.getByPrefix('attendance_record:');
-    const studentAttendance = allAttendance.filter(a => a.student_id === user.id);
-    
-    // Get course details
-    const attendanceWithCourses = await Promise.all(
-      studentAttendance.map(async (att) => {
-        const course = await kv.get(`course:${att.course_id}`);
-        return {
-          ...att,
-          course
-        };
+    // Record attendance
+    const { data: attendance, error: attendanceError } = await supabase
+      .from('attendance')
+      .upsert({
+        student_id: user.id,
+        session_id: session.id,
+        course_id: session.course_id,
+        status: 'present',
+        device_fingerprint,
+        timestamp: new Date().toISOString()
+      }, {
+        onConflict: 'student_id,session_id'
       })
-    );
+      .select()
+      .single();
     
-    return c.json({ attendance: attendanceWithCourses });
+    if (attendanceError) {
+      console.log('❌ Error recording attendance:', attendanceError);
+      return c.json({ error: attendanceError.message }, 500);
+    }
+    
+    console.log('✅ Attendance recorded:', attendance);
+    
+    return c.json({ 
+      message: 'Attendance recorded successfully',
+      messageAr: 'تم تسجيل الحضور بنجاح',
+      attendance 
+    });
   } catch (error) {
-    console.log('Get student attendance error:', error);
-    return c.json({ error: 'Internal server error while fetching student attendance' }, 500);
+    console.log('❌ Submit attendance error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-app.get("/server/attendance/course/:courseId", async (c) => {
+// Get attendance records
+app.get("/make-server-90ad488b/attendance", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
-    if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Instructor or Admin access required' }, 403);
-    }
+    const supabase = getSupabaseClient();
     
-    const courseId = c.req.param('courseId');
+    let query = supabase
+      .from('attendance')
+      .select(`
+        *,
+        student:student_id (
+          id,
+          full_name,
+          email,
+          university_id
+        ),
+        course:course_id (
+          id,
+          course_name,
+          course_code
+        ),
+        session:session_id (
+          id,
+          code,
+          created_at
+        )
+      `);
     
-    // Verify instructor teaches this course (if instructor)
-    if (user.role === 'instructor') {
-      const course = await kv.get(`course:${courseId}`);
-      if (!course || course.instructor_id !== user.id) {
-        return c.json({ error: 'You are not authorized to view this course attendance' }, 403);
-      }
-    }
-    
-    const allAttendance = await kv.getByPrefix('attendance_record:');
-    const courseAttendance = allAttendance.filter(a => a.course_id === courseId);
-    
-    // Get student details
-    const attendanceWithStudents = await Promise.all(
-      courseAttendance.map(async (att) => {
-        const student = await kv.get(`user:${att.student_id}`);
-        return {
-          ...att,
-          student
-        };
-      })
-    );
-    
-    return c.json({ attendance: attendanceWithStudents });
-  } catch (error) {
-    console.log('Get course attendance error:', error);
-    return c.json({ error: 'Internal server error while fetching course attendance' }, 500);
-  }
-});
-
-// ==================== REPORTS ====================
-
-app.get("/server/reports/course/:courseId", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Instructor or Admin access required' }, 403);
-    }
-    
-    const courseId = c.req.param('courseId');
-    
-    // Verify instructor teaches this course (if instructor)
-    if (user.role === 'instructor') {
-      const course = await kv.get(`course:${courseId}`);
-      if (!course || course.instructor_id !== user.id) {
-        return c.json({ error: 'You are not authorized to view this course report' }, 403);
-      }
-    }
-    
-    // Get all enrollments
-    const allEnrollments = await kv.getByPrefix('enrollment:');
-    const courseEnrollments = allEnrollments.filter(e => e.course_id === courseId);
-    
-    // Get all sessions
-    const allSessions = await kv.getByPrefix('session:');
-    const courseSessions = allSessions.filter(s => s.course_id === courseId);
-    
-    // Get all attendance
-    const allAttendance = await kv.getByPrefix('attendance_record:');
-    const courseAttendance = allAttendance.filter(a => a.course_id === courseId);
-    
-    // Build report
-    const report = await Promise.all(
-      courseEnrollments.map(async (enrollment) => {
-        const student = await kv.get(`user:${enrollment.student_id}`);
-        const studentAttendance = courseAttendance.filter(a => a.student_id === enrollment.student_id);
-        const attendanceRate = courseSessions.length > 0 
-          ? (studentAttendance.length / courseSessions.length) * 100 
-          : 0;
-        
-        return {
-          student_id: enrollment.student_id,
-          student_name: student?.full_name || 'Unknown',
-          student_email: student?.email || '',
-          total_sessions: courseSessions.length,
-          attended_sessions: studentAttendance.length,
-          attendance_rate: Math.round(attendanceRate),
-          attendance_records: studentAttendance
-        };
-      })
-    );
-    
-    return c.json({ report });
-  } catch (error) {
-    console.log('Get course report error:', error);
-    return c.json({ error: 'Internal server error while generating course report' }, 500);
-  }
-});
-
-app.get("/server/reports/overview", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    const users = await kv.getByPrefix('user:');
-    const courses = await kv.getByPrefix('course:');
-    const sessions = await kv.getByPrefix('session:');
-    const attendance = await kv.getByPrefix('attendance_record:');
-    
-    let overview = {
-      total_users: users.length,
-      total_students: users.filter(u => u.role === 'student').length,
-      total_instructors: users.filter(u => u.role === 'instructor').length,
-      total_courses: courses.length,
-      total_sessions: sessions.length,
-      total_attendance_records: attendance.length
-    };
-    
-    // Filter by role
-    if (user.role === 'instructor') {
-      const instructorCourses = courses.filter(c => c.instructor_id === user.id);
-      const instructorCoursesIds = instructorCourses.map(c => c.id);
-      const instructorSessions = sessions.filter(s => instructorCoursesIds.includes(s.course_id));
-      const instructorAttendance = attendance.filter(a => instructorCoursesIds.includes(a.course_id));
-      
-      overview = {
-        ...overview,
-        my_courses: instructorCourses.length,
-        my_sessions: instructorSessions.length,
-        my_attendance_records: instructorAttendance.length
-      };
-    }
-    
+    // If student, only show their attendance
     if (user.role === 'student') {
-      const studentEnrollments = await kv.getByPrefix(`enrollment:${user.id}:`);
-      const studentAttendance = attendance.filter(a => a.student_id === user.id);
-      const enrolledCoursesIds = studentEnrollments.map(e => e.course_id);
-      const enrolledSessions = sessions.filter(s => enrolledCoursesIds.includes(s.course_id));
-      
-      const attendanceRate = enrolledSessions.length > 0 
-        ? (studentAttendance.length / enrolledSessions.length) * 100 
-        : 0;
-      
-      overview = {
-        ...overview,
-        my_courses: studentEnrollments.length,
-        my_attendance_records: studentAttendance.length,
-        total_sessions: enrolledSessions.length,
-        my_attendance_rate: Math.round(attendanceRate)
-      };
+      query = query.eq('student_id', user.id);
     }
     
-    return c.json({ overview });
+    const { data: attendance, error } = await query.order('timestamp', { ascending: false });
+    
+    if (error) {
+      console.log('❌ Error fetching attendance:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    return c.json({ attendance: attendance || [] });
   } catch (error) {
-    console.log('Get overview error:', error);
-    return c.json({ error: 'Internal server error while generating overview' }, 500);
+    console.log('❌ Get attendance error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-// ==================== ATTENDANCE ENDPOINTS ====================
-
-// Get today's attendance (for all users - filtered by role)
-app.get("/server/attendance/today", async (c) => {
+// Get today's attendance
+app.get("/make-server-90ad488b/attendance/today", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
-    const today = new Date().toISOString().split('T')[0];
-    const allAttendance = await kv.getByPrefix('attendance_record:');
+    const supabase = getSupabaseClient();
     
-    // Filter today's attendance
-    const todayAttendance = allAttendance.filter(a => {
-      const attendanceDate = new Date(a.date).toISOString().split('T')[0];
-      return attendanceDate === today;
-    });
+    // Get today's date range
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
     
-    // Filter by role
-    let filteredAttendance = todayAttendance;
+    let query = supabase
+      .from('attendance')
+      .select(`
+        *,
+        student:student_id (
+          id,
+          full_name,
+          email,
+          university_id
+        ),
+        course:course_id (
+          id,
+          course_name,
+          course_code
+        ),
+        session:session_id (
+          id,
+          code,
+          created_at
+        )
+      `)
+      .gte('timestamp', today.toISOString())
+      .lt('timestamp', tomorrow.toISOString());
     
-    if (user.role === 'instructor') {
-      // Get instructor's courses
-      const courses = await kv.getByPrefix('course:');
-      const instructorCourses = courses.filter(c => c.instructor_id === user.id);
-      const courseIds = instructorCourses.map(c => c.id);
-      
-      // Filter attendance for instructor's courses only
-      filteredAttendance = todayAttendance.filter(a => courseIds.includes(a.course_id));
-    } else if (user.role === 'student') {
-      // Student can only see their own attendance
-      filteredAttendance = todayAttendance.filter(a => a.student_id === user.id);
+    // If student, only show their attendance
+    if (user.role === 'student') {
+      query = query.eq('student_id', user.id);
     }
-    // Admin can see all
     
-    return c.json({ attendance: filteredAttendance });
+    const { data: attendance, error } = await query.order('timestamp', { ascending: false });
+    
+    if (error) {
+      console.log('❌ Error fetching today\'s attendance:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    return c.json({ attendance: attendance || [] });
   } catch (error) {
-    console.log('Get today attendance error:', error);
-    return c.json({ error: 'Internal server error while fetching today attendance' }, 500);
+    console.log('❌ Get today\'s attendance error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-// Get my attendance (for students)
-app.get("/server/attendance/my", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-    
-    const allAttendance = await kv.getByPrefix('attendance_record:');
-    const myAttendance = allAttendance.filter(a => a.student_id === user.id);
-    
-    // Get course details
-    const attendanceWithCourses = await Promise.all(
-      myAttendance.map(async (att) => {
-        const course = await kv.get(`course:${att.course_id}`);
-        return {
-          ...att,
-          course_name: course?.course_name,
-          course_code: course?.course_code
-        };
-      })
-    );
-    
-    return c.json({ attendance: attendanceWithCourses });
-  } catch (error) {
-    console.log('Get my attendance error:', error);
-    return c.json({ error: 'Internal server error while fetching attendance' }, 500);
-  }
-});
+// ==================== AUTO-GENERATE EMAIL ====================
 
-// Get all users (with role-based filtering)
-app.get("/server/users", async (c) => {
+// Generate email from name
+app.post("/make-server-90ad488b/generate-email", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { full_name } = await c.req.json();
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (!full_name) {
+      return c.json({ error: 'Missing full_name' }, 400);
     }
     
-    const users = await kv.getByPrefix('user:');
+    // Convert Arabic/English name to email format
+    const nameParts = full_name.trim().split(/\s+/);
+    let emailPrefix = '';
     
-    // Role-based filtering
-    if (user.role === 'admin') {
-      // Admin can see all users
-      return c.json({ users });
-    } else if (user.role === 'instructor') {
-      // Instructor can see students in their courses
-      const courses = await kv.getByPrefix('course:');
-      const instructorCourses = courses.filter(c => c.instructor_id === user.id);
-      const courseIds = instructorCourses.map(c => c.id);
-      
-      // Get enrollments for instructor's courses
-      const enrollments = await kv.getByPrefix('enrollment:');
-      const relevantEnrollments = enrollments.filter(e => courseIds.includes(e.course_id));
-      const studentIds = relevantEnrollments.map(e => e.student_id);
-      
-      // Return students + self
-      const accessibleUsers = users.filter(u => 
-        u.id === user.id || 
-        (u.role === 'student' && studentIds.includes(u.id))
-      );
-      
-      return c.json({ users: accessibleUsers });
+    // Use first and last name
+    if (nameParts.length >= 2) {
+      emailPrefix = `${nameParts[0]}.${nameParts[nameParts.length - 1]}`.toLowerCase();
     } else {
-      // Students and supervisors can only see themselves
-      const selfUser = users.find(u => u.id === user.id);
-      return c.json({ users: selfUser ? [selfUser] : [] });
+      emailPrefix = nameParts[0].toLowerCase();
     }
+    
+    // Transliterate Arabic to English (basic)
+    const arabicToEnglish: { [key: string]: string } = {
+      'أ': 'a', 'ا': 'a', 'إ': 'i', 'آ': 'a',
+      'ب': 'b', 'ت': 't', 'ث': 'th', 'ج': 'j',
+      'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'th',
+      'ر': 'r', 'ز': 'z', 'س': 's', 'ش': 'sh',
+      'ص': 's', 'ض': 'd', 'ط': 't', 'ظ': 'z',
+      'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'q',
+      'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n',
+      'ه': 'h', 'و': 'w', 'ي': 'y', 'ى': 'a',
+      'ة': 'h', 'ء': 'a'
+    };
+    
+    emailPrefix = emailPrefix.split('').map(char => 
+      arabicToEnglish[char] || char
+    ).join('');
+    
+    // Clean up and add domain
+    emailPrefix = emailPrefix.replace(/[^a-z.]/g, '');
+    const email = `${emailPrefix}@kku.edu.sa`;
+    
+    return c.json({ email });
   } catch (error) {
-    console.log('Get users error:', error);
-    return c.json({ error: 'Internal server error while fetching users' }, 500);
+    console.log('❌ Generate email error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-// ==================== ADVANCED STATISTICS (ADMIN) ====================
+// ==================== ENROLLMENTS ENDPOINTS ====================
 
-// Get comprehensive dashboard statistics for Admin
-app.get("/server/stats/dashboard", async (c) => {
+// Enroll student in course
+app.post("/make-server-90ad488b/enrollments", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
     
-    if (user.role !== 'admin') {
-      return c.json({ error: 'Admin access required' }, 403);
+    const { student_id, course_id } = await c.req.json();
+    
+    if (!student_id || !course_id) {
+      return c.json({ 
+        error: 'Missing student_id or course_id',
+        messageAr: 'معرف الطالب أو المقرر مفقود'
+      }, 400);
     }
     
-    // Get all data
-    const [users, courses, sessions, allAttendance] = await Promise.all([
-      kv.getByPrefix('user:'),
-      kv.getByPrefix('course:'),
-      kv.getByPrefix('session:'),
-      kv.getByPrefix('attendance_record:')
-    ]);
+    const supabase = getSupabaseClient();
     
-    // Calculate basic stats
-    const totalUsers = users.length;
-    const totalStudents = users.filter(u => u.role === 'student').length;
-    const totalInstructors = users.filter(u => u.role === 'instructor').length;
-    const totalCourses = courses.length;
-    const totalSessions = sessions.length;
+    // Check if already enrolled
+    const { data: existing } = await supabase
+      .from('enrollments')
+      .select('*')
+      .eq('student_id', student_id)
+      .eq('course_id', course_id)
+      .single();
     
-    // Today's stats
-    const today = new Date().toISOString().split('T')[0];
-    const todaySessions = sessions.filter(s => {
-      const sessionDate = s.created_at ? new Date(s.created_at).toISOString().split('T')[0] : null;
-      return sessionDate === today;
-    });
-    const activeSessionsToday = todaySessions.filter(s => s.active === true).length;
+    if (existing) {
+      return c.json({ 
+        error: 'Student already enrolled in this course',
+        messageAr: 'الطالب مسجل مسبقاً في هذا المقرر'
+      }, 400);
+    }
     
-    const todayAttendance = allAttendance.filter(a => {
-      const attendanceDate = new Date(a.date).toISOString().split('T')[0];
-      return attendanceDate === today;
-    });
-    
-    const presentToday = todayAttendance.filter(a => a.status === 'present').length;
-    const absentToday = todayAttendance.filter(a => a.status === 'absent').length;
-    const totalTodayAttendance = presentToday + absentToday;
-    const attendanceRateToday = totalTodayAttendance > 0 
-      ? Math.round((presentToday / totalTodayAttendance) * 100) 
-      : 0;
-    
-    // Overall attendance rate
-    const totalAttendance = allAttendance.length;
-    const totalPresent = allAttendance.filter(a => a.status === 'present').length;
-    const overallAttendanceRate = totalAttendance > 0 
-      ? Math.round((totalPresent / totalAttendance) * 100) 
-      : 0;
-    
-    // Calculate enrollments
-    const enrollments = await kv.getByPrefix('enrollment:');
-    const totalEnrollments = enrollments.length;
-    
-    // Recent activity (last 10 sessions)
-    const recentSessions = sessions
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 10);
-    
-    const recentActivity = await Promise.all(
-      recentSessions.map(async (session) => {
-        const course = await kv.get(`course:${session.course_id}`);
-        const instructor = await kv.get(`user:${session.created_by}`);
-        
-        return {
-          id: session.id,
-          type: 'session',
-          title: session.session_type === 'live' 
-            ? (session.title || 'Live Session') 
-            : 'Attendance Session',
-          course_name: course?.course_name || 'Unknown Course',
-          course_code: course?.course_code || '',
-          instructor_name: instructor?.full_name || 'Unknown',
-          created_at: session.created_at,
-          active: session.active
-        };
+    // Create enrollment
+    const { data: enrollment, error } = await supabase
+      .from('enrollments')
+      .insert({
+        student_id,
+        course_id,
+        status: 'active'
       })
-    );
+      .select()
+      .single();
     
-    return c.json({
-      stats: {
-        totalUsers,
-        totalStudents,
-        totalInstructors,
-        totalCourses,
-        totalSessions,
-        totalEnrollments,
-        totalAttendance,
-        activeSessionsToday,
-        presentToday,
-        absentToday,
-        attendanceRateToday,
-        overallAttendanceRate,
-      },
-      recentActivity,
-      todaySessions: todaySessions.length,
-      timestamp: new Date().toISOString()
+    if (error) {
+      console.log('❌ Enrollment error:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    console.log('✅ Student enrolled:', enrollment);
+    
+    return c.json({ 
+      message: 'Student enrolled successfully',
+      messageAr: 'تم تسجيل الطالب بنجاح',
+      enrollment 
     });
   } catch (error) {
-    console.log('Get dashboard stats error:', error);
-    return c.json({ error: 'Internal server error while fetching dashboard stats' }, 500);
+    console.log('❌ Enrollment error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-// Health check endpoint
-app.get("/server/health", (c) => {
-  return c.json({ status: "ok" });
+// Get enrollments
+app.get("/make-server-90ad488b/enrollments", async (c) => {
+  try {
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
+    }
+    
+    const supabase = getSupabaseClient();
+    
+    let query = supabase
+      .from('enrollments')
+      .select(`
+        *,
+        student:student_id (
+          id,
+          full_name,
+          email,
+          university_id
+        ),
+        course:course_id (
+          id,
+          course_name,
+          course_code
+        )
+      `);
+    
+    // If student, only show their enrollments
+    if (user.role === 'student') {
+      query = query.eq('student_id', user.id);
+    }
+    
+    const { data: enrollments, error } = await query.order('enrolled_at', { ascending: false });
+    
+    if (error) {
+      console.log('❌ Error fetching enrollments:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    return c.json({ enrollments: enrollments || [] });
+  } catch (error) {
+    console.log('❌ Get enrollments error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
 });
 
 // ==================== LIVE SESSIONS ENDPOINTS ====================
 
-// Helper functions for live sessions
-function generateLiveSessionId(): string {
-  return `live_session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-}
-
-function generateAttendanceCode(): string {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
-// Create new live session
-app.post("/server/live-sessions", async (c) => {
+// Start live session
+app.post("/make-server-90ad488b/live-sessions/:id/start", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
-
-    const { course_id, title, type, scheduled_time } = await c.req.json();
-
-    if (!course_id || !title || !type) {
-      return c.json({ error: 'Missing required fields' }, 400);
-    }
-
-    if (!['audio', 'video'].includes(type)) {
-      return c.json({ error: 'Invalid session type' }, 400);
-    }
-
-    // Get course details
-    const course = await kv.get(`course:${course_id}`);
-    if (!course) {
-      return c.json({ error: 'Course not found' }, 404);
-    }
-
-    // Check if user is the instructor
+    
     if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Only instructors can create live sessions' }, 403);
-    }
-
-    if (user.role === 'instructor' && course.instructor_id !== user.id) {
-      return c.json({ error: 'You can only create sessions for your courses' }, 403);
-    }
-
-    const sessionId = generateLiveSessionId();
-    const now = new Date().toISOString();
-
-    const session = {
-      id: sessionId,
-      course_id,
-      course_name: course.course_name,
-      course_code: course.course_code,
-      instructor_id: user.id,
-      instructor_name: user.full_name,
-      title,
-      type,
-      status: scheduled_time ? 'scheduled' : 'waiting',
-      scheduled_time: scheduled_time || null,
-      start_time: null,
-      end_time: null,
-      meeting_url: null,
-      attendance_code: null,
-      participants: [],
-      created_at: now,
-      updated_at: now,
-    };
-
-    await kv.set(`live_session:${sessionId}`, session);
-
-    // Add to course sessions list
-    const courseSessions = await kv.get(`course:${course_id}:live_sessions`) || [];
-    courseSessions.push(sessionId);
-    await kv.set(`course:${course_id}:live_sessions`, courseSessions);
-
-    // Add to instructor sessions list
-    const instructorSessions = await kv.get(`instructor:${user.id}:live_sessions`) || [];
-    instructorSessions.push(sessionId);
-    await kv.set(`instructor:${user.id}:live_sessions`, instructorSessions);
-
-    return c.json({ 
-      message: 'Live session created successfully',
-      session 
-    });
-  } catch (err: any) {
-    console.error('Error creating live session:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Start a live session
-app.post("/server/live-sessions/:sessionId/start", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const sessionId = c.req.param('sessionId');
-    
-    // Try to find as live_session first, then as regular session
-    let session = await kv.get(`live_session:${sessionId}`);
-    let isRegularSession = false;
-    
-    if (!session) {
-      session = await kv.get(`session:${sessionId}`);
-      isRegularSession = true;
-    }
-
-    if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-
-    if (session.instructor_id !== user.id && user.role !== 'admin') {
-      return c.json({ error: 'Unauthorized' }, 403);
-    }
-
-    if (session.status === 'finished' || session.status === 'inactive') {
-      return c.json({ error: 'Session already finished' }, 400);
-    }
-
-    // Generate Jitsi meeting URL
-    const meetingRoomName = `kku_${sessionId}`;
-    const meetingUrl = `https://meet.jit.si/${meetingRoomName}`;
-    const attendanceCode = generateAttendanceCode();
-
-    session.status = isRegularSession ? 'active' : 'ongoing';
-    session.start_time = new Date().toISOString();
-    session.meeting_url = meetingUrl;
-    session.attendance_code = attendanceCode;
-    session.updated_at = new Date().toISOString();
-
-    // Save back to the correct key
-    const storageKey = isRegularSession ? `session:${sessionId}` : `live_session:${sessionId}`;
-    await kv.set(storageKey, session);
-
-    // Create notifications for all enrolled students
-    const course = await kv.get(`course:${session.course_id}`);
-    if (course) {
-      const enrollments = await kv.getByPrefix(`enrollment:`);
-      const courseEnrollments = enrollments.filter(e => e.course_id === session.course_id);
-
-      for (const enrollment of courseEnrollments) {
-        const studentId = enrollment.student_id;
-        const notificationId = `notification_${Date.now()}_${studentId}`;
-        const notification = {
-          id: notificationId,
-          user_id: studentId,
-          type: 'live_session_started',
-          title: 'جلسة مباشرة الآن',
-          message: `بدأت جلسة مباشرة للمقرر ${session.course_name}`,
-          data: {
-            session_id: sessionId,
-            course_id: session.course_id,
-            course_name: session.course_name,
-            meeting_url: meetingUrl,
-          },
-          read: false,
-          created_at: new Date().toISOString(),
-        };
-
-        await kv.set(`notification:${notificationId}`, notification);
-
-        const userNotifications = await kv.get(`user:${studentId}:notifications`) || [];
-        userNotifications.unshift(notificationId);
-        await kv.set(`user:${studentId}:notifications`, userNotifications.slice(0, 50));
-      }
-    }
-
-    return c.json({ message: 'Live session started successfully', session });
-  } catch (err: any) {
-    console.error('Error starting live session:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// End a live session
-app.post("/server/live-sessions/:sessionId/end", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const sessionId = c.req.param('sessionId');
-    
-    // Try to find as live_session first, then as regular session
-    let session = await kv.get(`live_session:${sessionId}`);
-    let isRegularSession = false;
-    
-    if (!session) {
-      session = await kv.get(`session:${sessionId}`);
-      isRegularSession = true;
-    }
-
-    if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-
-    if (session.instructor_id !== user.id && user.role !== 'admin') {
-      return c.json({ error: 'Unauthorized' }, 403);
-    }
-
-    session.status = isRegularSession ? 'inactive' : 'finished';
-    session.end_time = new Date().toISOString();
-    session.updated_at = new Date().toISOString();
-
-    // Save back to the correct key
-    const storageKey = isRegularSession ? `session:${sessionId}` : `live_session:${sessionId}`;
-    await kv.set(storageKey, session);
-
-    return c.json({ message: 'Live session ended successfully', session });
-  } catch (err: any) {
-    console.error('Error ending live session:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Record participant joining from Jitsi (for real-time tracking)
-app.post("/server/live-session-join", async (c) => {
-  try {
-    const { session_id, participant_id, participant_name, participant_email, joined_at } = await c.req.json();
-    
-    console.log('👋 [Server] Participant joined Jitsi:', { session_id, participant_name });
-    
-    if (!session_id || !participant_id) {
-      return c.json({ error: 'Missing required fields' }, 400);
+      return c.json({ 
+        error: 'Only instructors can start live sessions',
+        messageAr: 'يمكن للمدرسين فقط بدء الجلسات المباشرة'
+      }, 403);
     }
     
-    // Store participant info
-    const participantRecord = {
-      id: participant_id,
-      session_id,
-      name: participant_name,
-      email: participant_email,
-      joined_at: joined_at || new Date().toISOString(),
-      left_at: null,
-      duration: 0,
-    };
+    const sessionId = c.req.param('id');
     
-    await kv.set(`live_participant:${session_id}:${participant_id}`, participantRecord);
+    const supabase = getSupabaseClient();
     
-    // Try to match participant with a student by email and mark attendance
-    if (participant_email) {
-      const users = await kv.getByPrefix('user:');
-      const matchedUser = users.find((u: any) => u.email === participant_email);
-      
-      if (matchedUser && matchedUser.role === 'student') {
-        console.log('✅ [Server] Matched participant with student:', matchedUser.full_name);
-        
-        // Auto-mark attendance
-        const attendanceId = `attendance_${Date.now()}_${matchedUser.id}`;
-        const attendance = {
-          id: attendanceId,
-          session_id,
-          student_id: matchedUser.id,
-          student_name: matchedUser.full_name,
-          status: 'present',
-          session_type: 'live',
-          date: new Date().toISOString(),
-          marked_at: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          verification_method: 'jitsi_join',
-        };
-        
-        await kv.set(`attendance_record:${attendanceId}`, attendance);
-        console.log('✅ [Server] Attendance marked for:', matchedUser.full_name);
-      }
+    // Get the session
+    const { data: session, error: sessionError } = await supabase
+      .from('sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .single();
+    
+    if (sessionError || !session) {
+      return c.json({ 
+        error: 'Session not found',
+        messageAr: 'الجلسة غير موجودة'
+      }, 404);
     }
     
-    return c.json({ 
-      success: true,
-      message: 'Participant recorded successfully' 
-    });
+    // Generate Jitsi room name
+    const roomName = `kku_session_${sessionId}_${Date.now()}`;
+    const meetingUrl = `https://meet.jit.si/${roomName}`;
+    const attendanceCode = generateSessionCode();
     
-  } catch (err: any) {
-    console.error('❌ [Server] Error recording participant:', err);
-    return c.json({ error: err.message || 'Failed to record participant' }, 500);
-  }
-});
-
-// Join a live session (student)
-app.post("/server/live-sessions/:sessionId/join", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const sessionId = c.req.param('sessionId');
-    const session = await kv.get(`live_session:${sessionId}`);
-
-    if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-
-    if (session.status !== 'ongoing') {
-      return c.json({ error: 'Session is not active' }, 400);
-    }
-
-    // Check if student is enrolled in the course
-    const enrollment = await kv.get(`enrollment:${user.id}:${session.course_id}`);
-    if (!enrollment && user.role !== 'admin') {
-      return c.json({ error: 'You are not enrolled in this course' }, 403);
-    }
-
-    // Add student to participants if not already
-    if (!session.participants.includes(user.id)) {
-      session.participants.push(user.id);
-      session.updated_at = new Date().toISOString();
-      await kv.set(`live_session:${sessionId}`, session);
-
-      // Auto-mark attendance
-      const attendanceId = `attendance_${Date.now()}_${user.id}`;
-      const attendance = {
-        id: attendanceId,
-        session_id: sessionId,
-        student_id: user.id,
-        student_name: user.full_name,
+    // Create or update live session record
+    const { data: liveSession, error: liveError } = await supabase
+      .from('live_sessions')
+      .upsert({
+        id: sessionId,
         course_id: session.course_id,
-        status: 'present',
+        instructor_id: user.id,
+        title: session.title || 'Live Session',
+        description: session.description,
+        jitsi_room_name: roomName,
+        scheduled_at: new Date().toISOString(),
+        started_at: new Date().toISOString(),
+        status: 'live'
+      }, { onConflict: 'id' })
+      .select()
+      .single();
+    
+    if (liveError) {
+      console.log('❌ Live session creation error:', liveError);
+    }
+    
+    // Update session to mark it as live
+    await supabase
+      .from('sessions')
+      .update({ 
         session_type: 'live',
-        date: new Date().toISOString(),
-        marked_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-      };
-
-      await kv.set(`attendance_record:${attendanceId}`, attendance);
-
-      // Add to student attendance list
-      const studentAttendance = await kv.get(`student:${user.id}:attendance`) || [];
-      studentAttendance.push(attendanceId);
-      await kv.set(`student:${user.id}:attendance`, studentAttendance);
-    }
-
-    return c.json({ 
-      message: 'Joined session successfully',
-      session: {
-        id: session.id,
-        title: session.title,
-        type: session.type,
-        meeting_url: session.meeting_url,
-        course_name: session.course_name,
-        instructor_name: session.instructor_name,
-      }
-    });
-  } catch (err: any) {
-    console.error('Error joining live session:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Get instructor's live sessions
-app.get("/server/live-sessions/instructor", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const sessionIds = await kv.get(`instructor:${user.id}:live_sessions`) || [];
-    const sessions = [];
-
-    for (const sessionId of sessionIds) {
-      const session = await kv.get(`live_session:${sessionId}`);
-      if (session) {
-        sessions.push(session);
-      }
-    }
-
-    sessions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-    return c.json({ sessions });
-  } catch (err: any) {
-    console.error('Error fetching instructor sessions:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Get active live sessions for student
-app.get("/server/live-sessions/active", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const allCourses = await kv.getByPrefix('course:');
-    const enrollments = await kv.getByPrefix(`enrollment:${user.id}:`);
-    const enrolledCourseIds = enrollments.map(e => e.course_id);
-    const enrolledCourses = allCourses.filter(course => enrolledCourseIds.includes(course.id));
-
-    const activeSessions = [];
-
-    for (const course of enrolledCourses) {
-      const sessionIds = await kv.get(`course:${course.id}:live_sessions`) || [];
-      
-      for (const sessionId of sessionIds) {
-        const session = await kv.get(`live_session:${sessionId}`);
-        if (session && (session.status === 'ongoing' || session.status === 'scheduled')) {
-          activeSessions.push(session);
-        }
-      }
-    }
-
-    activeSessions.sort((a, b) => {
-      if (a.status === 'ongoing' && b.status !== 'ongoing') return -1;
-      if (a.status !== 'ongoing' && b.status === 'ongoing') return 1;
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-
-    return c.json({ sessions: activeSessions });
-  } catch (err: any) {
-    console.error('Error fetching student active sessions:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Get session details
-app.get("/server/live-sessions/:sessionId", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const sessionId = c.req.param('sessionId');
-    const session = await kv.get(`live_session:${sessionId}`);
-
-    if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-
-    // Check access
-    if (user.role === 'instructor') {
-      if (session.instructor_id !== user.id) {
-        return c.json({ error: 'Unauthorized' }, 403);
-      }
-    } else if (user.role === 'student') {
-      const enrollment = await kv.get(`enrollment:${user.id}:${session.course_id}`);
-      if (!enrollment) {
-        return c.json({ error: 'You are not enrolled in this course' }, 403);
-      }
-    } else if (user.role !== 'admin') {
-      return c.json({ error: 'Unauthorized' }, 403);
-    }
-
-    return c.json({ session });
-  } catch (err: any) {
-    console.error('Error fetching session details:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Get user notifications
-app.get("/server/notifications", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const notificationIds = await kv.get(`user:${user.id}:notifications`) || [];
-    const notifications = [];
-
-    for (const notificationId of notificationIds.slice(0, 20)) {
-      const notification = await kv.get(`notification:${notificationId}`);
-      if (notification) {
-        notifications.push(notification);
-      }
-    }
-
-    return c.json({ notifications });
-  } catch (err: any) {
-    console.error('Error fetching notifications:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Mark notification as read
-app.post("/server/notifications/:notificationId/read", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    const notificationId = c.req.param('notificationId');
-    const notification = await kv.get(`notification:${notificationId}`);
-
-    if (!notification) {
-      return c.json({ error: 'Notification not found' }, 404);
-    }
-
-    if (notification.user_id !== user.id) {
-      return c.json({ error: 'Unauthorized' }, 403);
-    }
-
-    notification.read = true;
-    await kv.set(`notification:${notificationId}`, notification);
-
-    return c.json({ message: 'Notification marked as read' });
-  } catch (err: any) {
-    console.error('Error marking notification as read:', err);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// ==================== SUPERVISOR ENDPOINTS ====================
-
-// Get supervisor dashboard statistics
-app.get("/server/supervisor/stats", async (c) => {
-  try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    // Only supervisors and admins can access this endpoint
-    if (user.role !== 'supervisor' && user.role !== 'admin') {
-      return c.json({ error: 'Unauthorized - Supervisor access required' }, 403);
-    }
-
-    console.log('📊 [Supervisor Stats] Fetching comprehensive statistics...');
-
-    // Get all users
-    const allUsers = await kv.getByPrefix('user:');
-    const students = allUsers.filter((u: any) => u.role === 'student');
-    const instructors = allUsers.filter((u: any) => u.role === 'instructor');
-
-    // Get all courses
-    const allCourses = await kv.getByPrefix('course:');
-    const activeCourses = allCourses.filter((c: any) => !c.id?.includes(':'));
-
-    // Get all sessions
-    const allSessions = await kv.getByPrefix('session:');
-    const regularSessions = allSessions.filter((s: any) => !s.id?.includes(':'));
-
-    // Get all live sessions
-    const allLiveSessions = await kv.getByPrefix('live_session:');
-    const activeLiveSessions = allLiveSessions.filter((s: any) => s.status === 'ongoing');
-
-    // Get all attendance records
-    const allAttendance = await kv.getByPrefix('attendance:');
+        active: true
+      })
+      .eq('id', sessionId);
     
-    // Calculate today's attendance
-    const today = new Date().toISOString().split('T')[0];
-    const todayAttendance = allAttendance.filter((a: any) => 
-      a.recorded_at?.startsWith(today)
-    );
-
-    // Count attendance statuses
-    const presentCount = allAttendance.filter((a: any) => a.status === 'present').length;
-    const absentCount = allAttendance.filter((a: any) => a.status === 'absent').length;
-    const lateCount = allAttendance.filter((a: any) => a.status === 'late').length;
-
-    // Calculate average attendance
-    const totalAttendanceRecords = presentCount + absentCount + lateCount;
-    const avgAttendance = totalAttendanceRecords > 0 
-      ? Math.round((presentCount / totalAttendanceRecords) * 100) 
-      : 0;
-
-    // Calculate course statistics
-    const courseStats = [];
-    for (const course of activeCourses.slice(0, 10)) {
-      const courseAttendance = allAttendance.filter((a: any) => a.course_id === course.id);
-      const coursePresent = courseAttendance.filter((a: any) => a.status === 'present').length;
-      const courseTotal = courseAttendance.length;
-      const attendanceRate = courseTotal > 0 ? Math.round((coursePresent / courseTotal) * 100) : 0;
-
-      // Get enrolled students count
-      const enrollments = await kv.getByPrefix(`enrollment:`) || [];
-      const courseEnrollments = enrollments.filter((e: any) => e.course_id === course.id);
-
-      courseStats.push({
-        name: course.code || course.name || 'Unknown',
-        attendance: attendanceRate,
-        students: courseEnrollments.length,
-      });
-    }
-
-    // Get recent activities
-    const recentActivities = [];
-    const sortedAttendance = [...allAttendance]
-      .sort((a, b) => new Date(b.recorded_at || 0).getTime() - new Date(a.recorded_at || 0).getTime())
-      .slice(0, 10);
-
-    for (const attendance of sortedAttendance) {
-      const student = await kv.get(`user:${attendance.student_id}`);
-      const course = await kv.get(`course:${attendance.course_id}`);
-      
-      if (student && course) {
-        const recordedAt = new Date(attendance.recorded_at);
-        const timeStr = recordedAt.toLocaleTimeString('ar-SA', { 
-          hour: '2-digit', 
-          minute: '2-digit',
-          hour12: true 
-        });
-
-        recentActivities.push({
-          courseName: course.name || course.code || 'Unknown Course',
-          studentName: student.full_name || 'Unknown Student',
-          time: timeStr,
-          type: attendance.status,
-        });
-      }
-    }
-
-    const stats = {
-      totalStudents: students.length,
-      totalInstructors: instructors.length,
-      totalCourses: activeCourses.length,
-      totalSessions: regularSessions.length,
-      avgAttendance,
-      activeSessions: activeLiveSessions.length,
-      todayAttendance: todayAttendance.filter((a: any) => a.status === 'present').length,
-      todayExpected: todayAttendance.length,
-      presentCount,
-      absentCount,
-      lateCount,
-      courseStats,
-      recentActivities,
-    };
-
-    console.log('✅ [Supervisor Stats] Statistics compiled successfully');
-    return c.json(stats);
-
-  } catch (err: any) {
-    console.error('❌ [Supervisor Stats] Error:', err);
-    return c.json({ error: 'Internal server error while fetching supervisor stats' }, 500);
-  }
-});
-
-// ==================== PUBLIC STATS ENDPOINT (REAL DATABASE) ====================
-
-// Get public stats for landing page (no authentication required)
-// Uses REAL SQL DATABASE queries instead of KV store
-app.get("/server/stats/public", async (c) => {
-  try {
-    console.log('📊 GET /stats/public - Fetching public statistics from REAL DATABASE');
+    console.log('✅ Live session started:', { sessionId, roomName, meetingUrl });
     
-    // Create Supabase client for direct database queries
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    );
-    
-    // Count students from profiles table
-    const { count: studentsCount, error: studentsError } = await supabase
-      .from('profiles')
-      .select('*', { count: 'exact', head: true })
-      .eq('role', 'student');
-    
-    if (studentsError) {
-      console.error('❌ Error counting students:', studentsError);
-    }
-    
-    // Count instructors from profiles table
-    const { count: instructorsCount, error: instructorsError } = await supabase
-      .from('profiles')
-      .select('*', { count: 'exact', head: true })
-      .eq('role', 'instructor');
-    
-    if (instructorsError) {
-      console.error('❌ Error counting instructors:', instructorsError);
-    }
-    
-    // Count courses from courses table
-    const { count: coursesCount, error: coursesError } = await supabase
-      .from('courses')
-      .select('*', { count: 'exact', head: true });
-    
-    if (coursesError) {
-      console.error('❌ Error counting courses:', coursesError);
-    }
-    
-    // Calculate attendance rate from attendance table
-    const { count: totalAttendance, error: totalAttendanceError } = await supabase
-      .from('attendance')
-      .select('*', { count: 'exact', head: true });
-    
-    const { count: presentAttendance, error: presentAttendanceError } = await supabase
-      .from('attendance')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'present');
-    
-    let attendanceRate = 99.8; // Default
-    if (!totalAttendanceError && !presentAttendanceError && totalAttendance && totalAttendance > 0) {
-      attendanceRate = (presentAttendance! / totalAttendance) * 100;
-    }
-    
-    const stats = {
-      studentsCount: studentsCount || 0,
-      instructorsCount: instructorsCount || 0,
-      coursesCount: coursesCount || 0,
-      attendanceRate: attendanceRate.toFixed(1)
-    };
-    
-    console.log('✅ Public stats retrieved from REAL DATABASE:', stats);
-    console.log(`   - Students: ${studentsCount}`);
-    console.log(`   - Instructors: ${instructorsCount}`);
-    console.log(`   - Courses: ${coursesCount}`);
-    console.log(`   - Attendance Rate: ${attendanceRate.toFixed(1)}%`);
-    
-    return c.json({ 
-      success: true,
-      stats,
-      source: 'real_database' // Indicate this is from real database, not KV store
+    return c.json({
+      message: 'Live session started successfully',
+      messageAr: 'تم بدء الجلسة المباشرة بنجاح',
+      meetingUrl,
+      roomName,
+      attendanceCode,
+      sessionId
     });
   } catch (error) {
-    console.log('❌ Get public stats error:', error);
-    return c.json({ 
-      success: false,
-      error: 'Internal server error while fetching public stats',
-      stats: {
-        studentsCount: 0,
-        instructorsCount: 0,
-        coursesCount: 0,
-        attendanceRate: '0'
-      }
-    }, 500);
+    console.log('❌ Start live session error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
-// ==================== DEMO DATA ====================
-
-// Initialize demo data for a user
-app.post("/server/init-demo-data", async (c) => {
+// End live session
+app.post("/make-server-90ad488b/live-sessions/:id/end", async (c) => {
   try {
-    const { error, user } = await getAuthenticatedUser(c.req.raw);
-    if (error || !user) {
-      return c.json({ error: error || 'Unauthorized' }, 401);
-    }
-
-    console.log('🎬 [Demo] Initializing demo data for:', user.email);
-
-    // Import demo data module
-    const { initializeDemoData, hasDemoData } = await import('./demo_data.tsx');
-
-    // Check if user already has demo data
-    const hasData = await hasDemoData(user.id, user.role);
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (hasData) {
-      console.log('ℹ️ [Demo] User already has demo data');
-      return c.json({ 
-        success: true, 
-        message: 'Demo data already exists',
-        already_exists: true 
-      });
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
     }
-
-    // Initialize demo data
-    const result = await initializeDemoData(user.id, user.role, user.email);
-
-    if (result.success) {
+    
+    if (user.role !== 'instructor' && user.role !== 'admin') {
       return c.json({ 
-        success: true, 
-        message: 'Demo data initialized successfully' 
-      });
-    } else {
-      return c.json({ 
-        error: 'Failed to initialize demo data' 
-      }, 500);
+        error: 'Only instructors can end live sessions',
+        messageAr: 'يمكن للمدرسين فقط إنهاء الجلسات المباشرة'
+      }, 403);
     }
-
-  } catch (err: any) {
-    console.error('❌ [Demo] Error:', err);
-    return c.json({ error: err.message || 'Internal server error' }, 500);
+    
+    const sessionId = c.req.param('id');
+    
+    const supabase = getSupabaseClient();
+    
+    // Update live session
+    const { error: updateError } = await supabase
+      .from('live_sessions')
+      .update({
+        ended_at: new Date().toISOString(),
+        status: 'ended'
+      })
+      .eq('id', sessionId);
+    
+    if (updateError) {
+      console.log('❌ Error ending live session:', updateError);
+    }
+    
+    // Deactivate the session
+    await supabase
+      .from('sessions')
+      .update({ active: false })
+      .eq('id', sessionId);
+    
+    console.log('✅ Live session ended:', sessionId);
+    
+    return c.json({
+      message: 'Live session ended successfully',
+      messageAr: 'تم إنهاء الجلسة المباشرة بنجاح'
+    });
+  } catch (error) {
+    console.log('❌ End live session error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
+// Record attendance when joining live session
+app.post("/make-server-90ad488b/live-session-join", async (c) => {
+  try {
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
+    }
+    
+    const { sessionId, participantName, participantEmail } = await c.req.json();
+    
+    if (!sessionId) {
+      return c.json({ 
+        error: 'Missing sessionId',
+        messageAr: 'معرف الجلسة مفقود'
+      }, 400);
+    }
+    
+    const supabase = getSupabaseClient();
+    
+    // Get the session
+    const { data: session, error: sessionError } = await supabase
+      .from('sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .single();
+    
+    if (sessionError || !session) {
+      console.log('⚠️ Session not found for live join:', sessionId);
+      // Don't fail - just log the attendance attempt
+    }
+    
+    // Record attendance
+    const { data: attendance, error: attendanceError } = await supabase
+      .from('attendance')
+      .insert({
+        student_id: user.id,
+        session_id: sessionId,
+        status: 'present',
+        date: new Date().toISOString().split('T')[0],
+        time: new Date().toTimeString().split(' ')[0]
+      })
+      .select()
+      .single();
+    
+    if (attendanceError) {
+      // Check if already recorded
+      if (attendanceError.code === '23505') {
+        console.log('ℹ️ Attendance already recorded for this student in this session');
+        return c.json({
+          message: 'Attendance already recorded',
+          messageAr: 'تم تسجيل الحضور مسبقاً'
+        });
+      }
+      
+      console.log('❌ Attendance recording error:', attendanceError);
+      return c.json({ error: attendanceError.message }, 500);
+    }
+    
+    console.log('✅ Attendance recorded for live session join:', attendance);
+    
+    return c.json({
+      message: 'Attendance recorded successfully',
+      messageAr: 'تم تسجيل الحضور بنجاح',
+      attendance
+    });
+  } catch (error) {
+    console.log('❌ Live session join error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Get live sessions
+app.get("/make-server-90ad488b/live-sessions", async (c) => {
+  try {
+    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (authError || !user) {
+      return c.json({ error: authError || 'Unauthorized' }, 401);
+    }
+    
+    const supabase = getSupabaseClient();
+    
+    let query = supabase
+      .from('live_sessions')
+      .select(`
+        *,
+        course:course_id (
+          id,
+          course_name,
+          course_code
+        ),
+        instructor:instructor_id (
+          id,
+          full_name,
+          email
+        )
+      `);
+    
+    // If instructor, only show their sessions
+    if (user.role === 'instructor') {
+      query = query.eq('instructor_id', user.id);
+    }
+    
+    const { data: liveSessions, error } = await query.order('created_at', { ascending: false });
+    
+    if (error) {
+      console.log('❌ Error fetching live sessions:', error);
+      return c.json({ error: error.message }, 500);
+    }
+    
+    return c.json({ liveSessions: liveSessions || [] });
+  } catch (error) {
+    console.log('❌ Get live sessions error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Start the server
 Deno.serve(app.fetch);

@@ -13,10 +13,10 @@ import {
 } from './ui/dialog';
 import { Alert, AlertDescription } from './ui/alert';
 import { BookOpen, Plus, Trash2, Search, AlertCircle, Users as UsersIcon, CheckCircle } from 'lucide-react';
-import { apiRequest } from '../utils/api';
 import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthContext';
 import { useLanguage } from './LanguageContext';
+import { toast } from 'sonner';
 
 interface Course {
   id: string;
@@ -50,6 +50,8 @@ export function CourseManagement() {
   const [newCourseName, setNewCourseName] = useState('');
   const [newCourseCode, setNewCourseCode] = useState('');
   const [newCourseInstructor, setNewCourseInstructor] = useState('');
+  const [newSemester, setNewSemester] = useState('');
+  const [newYear, setNewYear] = useState('');
 
   // Enrollment state
   const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -68,13 +70,23 @@ export function CourseManagement() {
     if (!token) return;
     
     try {
-      const data = await apiRequest('/courses', {
-        token,
-      });
+      console.log('📚 [CourseManagement] Loading courses from Supabase...');
+      
+      const { data, error } = await supabase
+        .from('courses')
+        .select('*')
+        .order('course_name', { ascending: true });
 
-      setCourses(data.courses || []);
-    } catch (error) {
-      console.error('Error loading courses:', error);
+      if (error) {
+        console.error('❌ [CourseManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [CourseManagement] Loaded', data?.length, 'courses');
+      setCourses(data || []);
+    } catch (error: any) {
+      console.error('❌ [CourseManagement] Error loading courses:', error);
+      toast.error('فشل تحميل المواد / Failed to load courses');
       setError('فشل تحميل المواد');
     } finally {
       setLoading(false);
@@ -85,13 +97,24 @@ export function CourseManagement() {
     if (!token) return;
     
     try {
-      const data = await apiRequest('/users', {
-        token,
-      });
+      console.log('👨‍🏫 [CourseManagement] Loading instructors from Supabase...');
+      
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'instructor')
+        .order('full_name', { ascending: true });
 
-      setInstructors(data.users.filter((u: User) => u.role === 'instructor'));
-    } catch (error) {
-      console.error('Error loading instructors:', error);
+      if (error) {
+        console.error('❌ [CourseManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [CourseManagement] Loaded', data?.length, 'instructors');
+      setInstructors(data || []);
+    } catch (error: any) {
+      console.error('❌ [CourseManagement] Error loading instructors:', error);
+      toast.error('فشل تحميل المدرسين / Failed to load instructors');
     }
   };
 
@@ -99,13 +122,24 @@ export function CourseManagement() {
     if (!token) return;
     
     try {
-      const data = await apiRequest('/users', {
-        token,
-      });
+      console.log('🎓 [CourseManagement] Loading students from Supabase...');
+      
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'student')
+        .order('full_name', { ascending: true });
 
-      setStudents(data.users.filter((u: User) => u.role === 'student'));
-    } catch (error) {
-      console.error('Error loading students:', error);
+      if (error) {
+        console.error('❌ [CourseManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [CourseManagement] Loaded', data?.length, 'students');
+      setStudents(data || []);
+    } catch (error: any) {
+      console.error('❌ [CourseManagement] Error loading students:', error);
+      toast.error('فشل تحميل الطلاب / Failed to load students');
     }
   };
 
@@ -119,30 +153,46 @@ export function CourseManagement() {
     }
 
     try {
+      console.log('➕ [CourseManagement] Adding new course to Supabase...');
+      
       // For instructors, automatically assign themselves
       const instructorId = currentUser?.role === 'instructor' 
         ? currentUser.id 
         : (newCourseInstructor || null);
 
-      await apiRequest('/courses', {
-        method: 'POST',
-        body: {
+      const { data, error } = await supabase
+        .from('courses')
+        .insert({
           course_name: newCourseName,
           course_code: newCourseCode,
           instructor_id: instructorId,
-        },
-        token,
-      });
+          semester: newSemester,
+          year: newYear,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ [CourseManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [CourseManagement] Course added successfully');
+      toast.success('تم إضافة المادة بنجاح / Course added successfully');
 
       // Reset form
       setNewCourseName('');
       setNewCourseCode('');
       setNewCourseInstructor('');
+      setNewSemester('');
+      setNewYear('');
       setIsDialogOpen(false);
 
       // Reload courses
       await loadCourses();
     } catch (error: any) {
+      console.error('❌ [CourseManagement] Error adding course:', error);
+      toast.error('فشل إضافة المادة / Failed to add course');
       setError(error.message || 'فشل إضافة المادة');
     }
   };
@@ -155,14 +205,25 @@ export function CourseManagement() {
     }
 
     try {
-      await apiRequest(`/courses/${courseId}`, {
-        method: 'DELETE',
-        token,
-      });
+      console.log('🗑️ [CourseManagement] Deleting course from Supabase...');
+      
+      const { error } = await supabase
+        .from('courses')
+        .delete()
+        .eq('id', courseId);
+
+      if (error) {
+        console.error('❌ [CourseManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [CourseManagement] Course deleted successfully');
+      toast.success('تم حذف المادة بنجاح / Course deleted successfully');
 
       await loadCourses();
-    } catch (error) {
-      console.error('Error deleting course:', error);
+    } catch (error: any) {
+      console.error('❌ [CourseManagement] Error deleting course:', error);
+      toast.error('فشل حذف المادة / Failed to delete course');
       setError('فشل حذف المادة');
     }
   };
@@ -177,29 +238,40 @@ export function CourseManagement() {
     }
 
     try {
-      await apiRequest('/enrollments', {
-        method: 'POST',
-        body: {
+      console.log('📝 [CourseManagement] Enrolling student in course...');
+      
+      const { data, error } = await supabase
+        .from('enrollments')
+        .insert({
           student_id: selectedStudentId,
           course_id: selectedCourseId,
-        },
-        token,
-      });
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ [CourseManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [CourseManagement] Student enrolled successfully');
 
       // Success!
       const selectedStudent = students.find(s => s.id === selectedStudentId);
       const selectedCourse = courses.find(c => c.id === selectedCourseId);
       
-      alert(
+      toast.success(
         language === 'ar' 
-          ? `✅ تم تسجيل الطالب ${selectedStudent?.full_name} في المقرر ${selectedCourse?.course_name} بنجاح!\n\nالمقرر سيظهر الآن في لوحة الطالب.`
-          : `✅ Student ${selectedStudent?.full_name} has been successfully enrolled in ${selectedCourse?.course_name}!\n\nThe course will now appear in the student's dashboard.`
+          ? `تم تسجيل الطالب ${selectedStudent?.full_name} في المقرر ${selectedCourse?.course_name} بنجاح!`
+          : `Student ${selectedStudent?.full_name} has been successfully enrolled in ${selectedCourse?.course_name}!`
       );
 
       setEnrollDialogOpen(false);
       setSelectedStudentId('');
       setSelectedCourseId('');
     } catch (err: any) {
+      console.error('❌ [CourseManagement] Error enrolling student:', err);
+      toast.error(language === 'ar' ? 'فشل تسجيل الطالب' : 'Failed to enroll student');
       setError(err.message || (language === 'ar' ? 'فشل تسجيل الطالب' : 'Failed to enroll student'));
     }
   };
@@ -316,6 +388,42 @@ export function CourseManagement() {
                     </AlertDescription>
                   </Alert>
                 )}
+
+                <div className="space-y-2">
+                  <Label htmlFor="semester">
+                    {language === 'ar' ? 'الفصل الدراسي' : 'Semester'}
+                  </Label>
+                  <select
+                    id="semester"
+                    className="w-full h-10 px-3 rounded-md border border-input bg-background"
+                    value={newSemester}
+                    onChange={(e) => setNewSemester(e.target.value)}
+                    required
+                  >
+                    <option value="">
+                      {language === 'ar' ? '-- اختر الفصل --' : '-- Select Semester --'}
+                    </option>
+                    <option value="Fall">{language === 'ar' ? 'الخريف' : 'Fall'}</option>
+                    <option value="Spring">{language === 'ar' ? 'الربيع' : 'Spring'}</option>
+                    <option value="Summer">{language === 'ar' ? 'الصيف' : 'Summer'}</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="year">
+                    {language === 'ar' ? 'السنة الدراسية' : 'Academic Year'}
+                  </Label>
+                  <Input
+                    id="year"
+                    type="number"
+                    value={newYear}
+                    onChange={(e) => setNewYear(e.target.value)}
+                    placeholder={language === 'ar' ? 'مثال: 2024' : 'e.g., 2024'}
+                    min="2020"
+                    max="2030"
+                    required
+                  />
+                </div>
 
                 {error && (
                   <Alert variant="destructive">

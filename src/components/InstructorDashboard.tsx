@@ -2,11 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
-import { apiRequest } from '../utils/api';
+import { supabase } from '../utils/supabaseClient';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import { DemoDataInitializer } from './DemoDataInitializer';
 import { 
   Users, 
   BookOpen, 
@@ -64,62 +63,72 @@ export function InstructorDashboard() {
       setLoading(true);
       
       // Load data in parallel
-      const [coursesData, sessionsData, studentsData, attendanceData] = await Promise.all([
-        apiRequest('/courses', { token }).catch(() => ({ courses: [] })),
-        apiRequest('/sessions', { token }).catch(() => ({ sessions: [] })),
-        apiRequest('/users', { token }).catch(() => ({ users: [] })),
-        apiRequest('/attendance/today', { token }).catch(() => ({ attendance: [] })),
+      const [coursesData, sessionsData, enrollmentsData, attendanceData] = await Promise.all([
+        supabase.from('courses').select('*').eq('instructor_id', user?.id).then(res => res.data || []),
+        supabase.from('sessions').select('*, course:course_id(course_name, course_code)').then(res => res.data || []),
+        supabase.from('enrollments').select('student_id').then(res => res.data || []),
+        supabase.from('attendance').select('*').gte('recorded_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString()).then(res => res.data || []),
       ]);
 
-      const allCourses = coursesData.courses || [];
-      const allSessions = sessionsData.sessions || [];
-      const allUsers = studentsData.users || [];
-      const todayAttendance = attendanceData.attendance || [];
+      const myCourses = coursesData || [];
+      const allSessions = sessionsData || [];
+      const allEnrollments = enrollmentsData || [];
+      const todayAttendance = attendanceData || [];
 
-      // Filter my courses (as instructor)
-      const instructorCourses = allCourses.filter((c: any) => 
-        c.instructor_id === user?.id || c.instructor_email === user?.email
+      setMyCourses(myCourses);
+
+      // Get course IDs for instructor
+      const courseIds = myCourses.map((c: any) => c.id);
+
+      // Count unique students enrolled in instructor's courses
+      const enrolledStudentIds = new Set(
+        allEnrollments
+          .filter((e: any) => courseIds.includes(e.course_id))
+          .map((e: any) => e.student_id)
       );
-      
-      setMyCourses(instructorCourses);
+      const totalStudents = enrolledStudentIds.size;
 
-      // Get all students enrolled in my courses
-      const courseIds = instructorCourses.map((c: any) => c.id);
-      const enrolledStudents = allUsers.filter((u: any) => 
-        u.role === 'student' && courseIds.some(id => u.enrolled_courses?.includes(id))
-      );
-
-      // Get my sessions
+      // Get instructor's sessions
       const mySessions = allSessions.filter((s: any) => 
-        courseIds.includes(s.course_id) || s.instructor_id === user?.id
+        courseIds.includes(s.course_id)
       );
 
       // Today's sessions
-      const today = new Date().toISOString().split('T')[0];
-      const todaySessions = mySessions.filter((s: any) => s.date?.startsWith(today));
+      const todayStart = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+      const todayEnd = new Date(new Date().setHours(23, 59, 59, 999)).toISOString();
+      const todaySessions = mySessions.filter((s: any) => {
+        const sessionDate = new Date(s.session_date).getTime();
+        const todayStartTime = new Date(todayStart).getTime();
+        const todayEndTime = new Date(todayEnd).getTime();
+        return sessionDate >= todayStartTime && sessionDate <= todayEndTime;
+      });
 
-      // Live sessions
-      const liveSessions = mySessions.filter((s: any) => s.status === 'active' || s.is_live);
+      // Get live sessions count
+      const { data: liveSessions } = await supabase
+        .from('live_sessions')
+        .select('id')
+        .eq('instructor_id', user?.id)
+        .eq('status', 'active');
 
-      // Calculate attendance stats
+      // Calculate attendance for instructor's courses
       const myAttendance = todayAttendance.filter((a: any) => 
-        courseIds.includes(a.course_id)
+        courseIds.includes(a.course_id) || mySessions.some(s => s.id === a.session_id)
       );
       
       const presentCount = myAttendance.filter((a: any) => a.status === 'present').length;
       const absentCount = myAttendance.filter((a: any) => a.status === 'absent').length;
-      const totalAttendance = presentCount + absentCount;
-      const avgAttendance = totalAttendance > 0 ? (presentCount / totalAttendance) * 100 : 0;
+      const totalAttendanceRecords = presentCount + absentCount;
+      const avgAttendance = totalAttendanceRecords > 0 ? Math.round((presentCount / totalAttendanceRecords) * 100) : 0;
 
       setStats({
-        myCourses: instructorCourses.length,
-        totalStudents: enrolledStudents.length,
+        myCourses: myCourses.length,
+        totalStudents: totalStudents,
         totalSessions: mySessions.length,
         activeSessionsToday: todaySessions.length,
-        averageAttendance: Math.round(avgAttendance),
+        averageAttendance: avgAttendance,
         presentToday: presentCount,
         absentToday: absentCount,
-        liveSessionsCount: liveSessions.length,
+        liveSessionsCount: liveSessions?.length || 0,
       });
 
       // Set upcoming sessions
@@ -233,17 +242,6 @@ export function InstructorDashboard() {
           {language === 'ar' ? 'إدارة موادك وجلساتك بكفاءة' : 'Manage your courses and sessions efficiently'}
         </p>
       </div>
-
-      {/* Show Demo Data Initializer if no courses */}
-      {stats.myCourses === 0 && stats.totalSessions === 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-        >
-          <DemoDataInitializer onSuccess={() => window.location.reload()} />
-        </motion.div>
-      )}
 
       {/* Main Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

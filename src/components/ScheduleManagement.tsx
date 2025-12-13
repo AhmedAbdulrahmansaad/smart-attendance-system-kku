@@ -13,8 +13,9 @@ import {
 } from './ui/dialog';
 import { Alert, AlertDescription } from './ui/alert';
 import { Calendar, Plus, Trash2, AlertCircle, Clock } from 'lucide-react';
-import { apiRequest } from '../utils/api';
+import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthContext';
+import { toast } from 'sonner';
 
 interface Schedule {
   id: string;
@@ -72,13 +73,46 @@ export function ScheduleManagement() {
     if (!token) return;
     
     try {
-      const data = await apiRequest('/schedules', {
-        token,
+      console.log('📅 [ScheduleManagement] Loading schedules from Supabase...');
+      
+      // Load schedules
+      const { data: schedulesData, error: schedulesError } = await supabase
+        .from('schedules')
+        .select('*')
+        .order('day_of_week', { ascending: true });
+
+      if (schedulesError) {
+        console.error('❌ [ScheduleManagement] Error:', schedulesError);
+        throw schedulesError;
+      }
+
+      // Load courses separately
+      const { data: coursesData, error: coursesError } = await supabase
+        .from('courses')
+        .select('id, course_name, course_code');
+
+      if (coursesError) {
+        console.error('❌ [ScheduleManagement] Courses error:', coursesError);
+        // Continue without courses
+      }
+
+      // Manually join schedules with courses
+      const schedulesWithCourses = (schedulesData || []).map(schedule => {
+        const course = coursesData?.find(c => c.id === schedule.course_id);
+        return {
+          ...schedule,
+          course: course ? {
+            course_name: course.course_name,
+            course_code: course.course_code
+          } : undefined
+        };
       });
 
-      setSchedules(data.schedules || []);
-    } catch (error) {
-      console.error('Error loading schedules:', error);
+      console.log('✅ [ScheduleManagement] Loaded', schedulesWithCourses.length, 'schedules');
+      setSchedules(schedulesWithCourses);
+    } catch (error: any) {
+      console.error('❌ [ScheduleManagement] Error loading schedules:', error);
+      toast.error('فشل تحميل الجداول / Failed to load schedules');
       setError('فشل تحميل الجداول');
     } finally {
       setLoading(false);
@@ -89,13 +123,23 @@ export function ScheduleManagement() {
     if (!token) return;
     
     try {
-      const data = await apiRequest('/courses', {
-        token,
-      });
+      console.log('📚 [ScheduleManagement] Loading courses from Supabase...');
+      
+      const { data, error } = await supabase
+        .from('courses')
+        .select('*')
+        .order('course_name', { ascending: true });
 
-      setCourses(data.courses || []);
-    } catch (error) {
-      console.error('Error loading courses:', error);
+      if (error) {
+        console.error('❌ [ScheduleManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [ScheduleManagement] Loaded', data?.length, 'courses');
+      setCourses(data || []);
+    } catch (error: any) {
+      console.error('❌ [ScheduleManagement] Error loading courses:', error);
+      toast.error('فشل تحميل المقررات / Failed to load courses');
     }
   };
 
@@ -109,17 +153,27 @@ export function ScheduleManagement() {
     }
 
     try {
-      await apiRequest('/schedules', {
-        method: 'POST',
-        body: {
+      console.log('➕ [ScheduleManagement] Adding new schedule to Supabase...');
+      
+      const { data, error } = await supabase
+        .from('schedules')
+        .insert({
           course_id: newScheduleCourse,
           day_of_week: newScheduleDay,
           start_time: newScheduleStartTime,
           end_time: newScheduleEndTime,
-          location: newScheduleLocation,
-        },
-        token,
-      });
+          location: newScheduleLocation || null,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ [ScheduleManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [ScheduleManagement] Schedule added successfully');
+      toast.success('تم إضافة الجدول بنجاح / Schedule added successfully');
 
       setIsDialogOpen(false);
       setNewScheduleCourse('');
@@ -130,6 +184,8 @@ export function ScheduleManagement() {
       
       await loadSchedules();
     } catch (err: any) {
+      console.error('❌ [ScheduleManagement] Error adding schedule:', err);
+      toast.error('فشل إضافة الجدول / Failed to add schedule');
       setError(err.message || 'فشل إضافة الجدول');
     }
   };
@@ -142,14 +198,25 @@ export function ScheduleManagement() {
     }
 
     try {
-      await apiRequest(`/schedules/${scheduleId}`, {
-        method: 'DELETE',
-        token,
-      });
+      console.log('🗑️ [ScheduleManagement] Deleting schedule from Supabase...');
+      
+      const { error } = await supabase
+        .from('schedules')
+        .delete()
+        .eq('id', scheduleId);
+
+      if (error) {
+        console.error('❌ [ScheduleManagement] Error:', error);
+        throw error;
+      }
+
+      console.log('✅ [ScheduleManagement] Schedule deleted successfully');
+      toast.success('تم حذف الجدول بنجاح / Schedule deleted successfully');
 
       await loadSchedules();
-    } catch (error) {
-      console.error('Error deleting schedule:', error);
+    } catch (error: any) {
+      console.error('❌ [ScheduleManagement] Error deleting schedule:', error);
+      toast.error('فشل حذف الجدول / Failed to delete schedule');
       setError('فشل حذف الجدول');
     }
   };

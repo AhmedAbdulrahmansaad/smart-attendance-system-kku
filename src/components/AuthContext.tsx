@@ -43,18 +43,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isRefreshingRef = useRef(false);
 
-  // Memoized refreshUser to prevent re-creation
-  const refreshUser = useCallback(async () => {
+  // Refresh user data
+  const refreshUser = async () => {
     // Prevent concurrent refreshes
     if (isRefreshingRef.current) {
-      console.log('⏸️ [AuthContext] Refresh already in progress, skipping');
+      console.log('🔄 [AuthContext] Refresh already in progress, skipping...');
       return;
     }
-    
+
     isRefreshingRef.current = true;
-    console.log('🔄 [AuthContext] refreshUser called');
-    
+
     try {
+      console.log('🔄 [AuthContext] Refreshing user data...');
+      
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError) {
@@ -62,87 +63,134 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         setToken(null);
         setLoading(false);
+        isRefreshingRef.current = false;
         return;
       }
-      
-      if (session?.access_token) {
-        // Check if token is about to expire (within 5 minutes)
-        const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
-        const now = Date.now();
-        const timeUntilExpiry = expiresAt - now;
-        
-        console.log('⏰ [AuthContext] Token expires in:', Math.floor(timeUntilExpiry / 1000 / 60), 'minutes');
-        
-        // If token expires in less than 5 minutes, refresh it
-        if (timeUntilExpiry < 5 * 60 * 1000 && timeUntilExpiry > 0) {
-          console.log('🔄 [AuthContext] Token expiring soon, refreshing...');
-          const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-          
-          if (refreshError) {
-            console.error('❌ [AuthContext] Refresh error:', refreshError);
-            // If refresh fails, sign out
-            await signOut();
-            return;
-          }
-          
-          if (refreshData.session) {
-            console.log('✅ [AuthContext] Token refreshed successfully');
-            session.access_token = refreshData.session.access_token;
-          }
-        }
-        
-        try {
-          console.log('🌐 [AuthContext] Calling /me endpoint');
-          const userData = await apiRequest('/me', {
-            token: session.access_token,
-          });
-          
-          console.log('✅ [AuthContext] User data received:', userData.user);
-          
-          // Only update if data actually changed (prevents unnecessary re-renders)
-          setUser(prev => {
-            const newUser = userData.user;
-            if (!prev || prev.id !== newUser.id || prev.email !== newUser.email || prev.role !== newUser.role) {
-              return newUser;
-            }
-            return prev;
-          });
-          
-          setToken(prev => {
-            if (prev !== session.access_token) {
-              return session.access_token;
-            }
-            return prev;
-          });
-        } catch (apiError: any) {
-          console.error('❌ [AuthContext] Error from /me endpoint:', apiError);
-          
-          // If 401, token is invalid - sign out
-          if (apiError.message?.includes('401') || apiError.message?.includes('Unauthorized') || apiError.message?.includes('Invalid JWT')) {
-            console.log('🚪 [AuthContext] Invalid token, signing out...');
-            await signOut();
-            return;
-          }
-          
-          // For other errors, keep the session but don't set user
-          setUser(null);
-          setToken(null);
-        }
-      } else {
+
+      if (!session) {
         console.log('ℹ️ [AuthContext] No active session');
         setUser(null);
         setToken(null);
+        setLoading(false);
+        isRefreshingRef.current = false;
+        return;
       }
-    } catch (error) {
-      console.error('❌ [AuthContext] Outer catch error:', error);
+
+      const authUser = session;
+      console.log('✅ [AuthContext] Active session found for user:', authUser.user.id);
+
+      // Read directly from Supabase (skip Edge Function for now)
+      try {
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authUser.user.id)
+          .single();
+        
+        if (profileError) {
+          console.error('❌ [AuthContext] Profile error:', profileError);
+          
+          // Check if table doesn't exist
+          if (profileError.code === '42P01') {
+            console.error('🔥 [AuthContext] TABLE DOES NOT EXIST!');
+            toast.error('خطأ في قاعدة البيانات / Database Error', {
+              description: 'الجداول غير موجودة! يرجى تشغيل السكريبت SQL\nTables not found! Please run SQL script',
+              duration: 10000
+            });
+          } else if (profileError.code === '42P17') {
+            console.error('🔥 [AuthContext] INFINITE RECURSION IN RLS POLICY!');
+            toast.error('خطأ في السياسات الأمنية / RLS Policy Error', {
+              description: 'يرجى تشغيل سكريبت إصلاح RLS\nPlease run RLS fix script',
+              duration: 10000
+            });
+          } else if (profileError.code === 'PGRST116') {
+            // No profile found - try to create from metadata
+            console.warn('⚠️ [AuthContext] Profile not found for user:', authUser.user.id);
+            
+            const userMetadata = authUser.user.user_metadata;
+            if (userMetadata && userMetadata.full_name && userMetadata.role) {
+              console.log('🔄 [AuthContext] Creating profile from metadata...');
+              
+              const { data: newProfile, error: insertError } = await supabase
+                .from('profiles')
+                .insert({
+                  id: authUser.user.id,
+                  email: authUser.user.email || '',
+                  full_name: userMetadata.full_name,
+                  role: userMetadata.role,
+                  university_id: userMetadata.university_id || null
+                })
+                .select()
+                .single();
+              
+              if (insertError) {
+                console.error('❌ [AuthContext] Failed to create profile:', insertError);
+                toast.error('فشل إنشاء الملف الشخصي / Failed to create profile', {
+                  description: insertError.message
+                });
+                setUser(null);
+                setToken(null);
+                setLoading(false);
+                isRefreshingRef.current = false;
+                return;
+              }
+              
+              console.log('✅ [AuthContext] Profile created from metadata:', newProfile);
+              setUser(newProfile);
+              setToken(authUser.access_token);
+              setLoading(false);
+              isRefreshingRef.current = false;
+              return;
+            }
+            
+            toast.error('الملف الشخصي غير موجود / Profile not found', {
+              description: 'يرجى التواصل مع المسؤول / Please contact admin'
+            });
+          }
+          
+          setUser(null);
+          setToken(null);
+          setLoading(false);
+          isRefreshingRef.current = false;
+          return;
+        }
+        
+        if (!profile) {
+          console.error('❌ [AuthContext] Profile not found in database');
+          toast.error('الملف الشخصي غير موجود / Profile not found', {
+            description: 'يرجى إنشاء حساب جديد / Please sign up again'
+          });
+          setUser(null);
+          setToken(null);
+          setLoading(false);
+          isRefreshingRef.current = false;
+          return;
+        }
+        
+        console.log('✅ [AuthContext] Profile loaded from Supabase:', profile);
+        setUser(profile);
+        setToken(authUser.access_token);
+        setLoading(false);
+        isRefreshingRef.current = false;
+        
+      } catch (dbError: any) {
+        console.error('❌ [AuthContext] Database error:', dbError);
+        toast.error('خطأ في قاعدة البيانات / Database error', {
+          description: dbError.message
+        });
+        setUser(null);
+        setToken(null);
+        setLoading(false);
+        isRefreshingRef.current = false;
+      }
+    } catch (error: any) {
+      console.error('❌ [AuthContext] Refresh user error:', error);
       setUser(null);
       setToken(null);
-    } finally {
       setLoading(false);
       isRefreshingRef.current = false;
-      console.log('✅ [AuthContext] refreshUser completed');
     }
-  }, []);
+  };
 
   useEffect(() => {
     console.log('🚀 [AuthContext] Initializing...');
@@ -219,39 +267,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       console.log('✅ [AuthContext] Supabase auth successful');
 
-      // التحقق من الجلسة في الخادم (Session Management)
-      console.log('🔒 [AuthContext] Registering device session...');
-      try {
-        const sessionResponse = await apiRequest('/session/register', {
-          method: 'POST',
-          token: authData.session.access_token,
-          body: {
-            device_fingerprint: deviceData.fingerprint,
-            device_info: {
-              platform: deviceData.platform,
-              userAgent: deviceData.userAgent,
-              vendor: deviceData.vendor,
-              summary: getDeviceSummary(deviceData)
-            },
-            ip_address: deviceData.ip,
-            location: deviceData.location
-          }
-        });
-
-        console.log('✅ [AuthContext] Device session registered:', sessionResponse);
-      } catch (sessionError: any) {
-        console.error('❌ [AuthContext] Session registration error:', sessionError);
-        
-        // إذا كان هناك جلسة نشطة أخرى، نمنع تسجيل الدخول
-        if (sessionError.session_conflict) {
-          await supabase.auth.signOut();
-          throw new Error('يوجد جلسة نشطة على جهاز آخر. يرجى تسجيل الخروج من الجهاز الآخر أولاً.\n\nAnother active session detected. Please logout from the other device first.');
-        }
-        
-        // في حالة حدوث خطأ آخر، نستمر في تسجيل الدخول
-        console.warn('⚠️ [AuthContext] Session registration failed but continuing login');
-      }
-
+      // Skip session registration (Edge Function not needed)
+      console.log('✅ [AuthContext] Skipping session registration (working without Edge Function)');
+      
       // حفظ البصمة في LocalStorage
       saveFingerprintToStorage(deviceData);
 
@@ -312,25 +330,115 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // استدعاء API endpoint للتسجيل
+      // Try Edge Function first
       console.log('🌐 [AuthContext] Calling /signup endpoint...');
-      await apiRequest('/signup', {
-        method: 'POST',
-        body: {
-          email,
-          password,
-          full_name: fullName,
-          role,
-          university_id: role === 'student' ? universityId : null,
-          device_fingerprint: deviceData.fingerprint,
-          device_info: {
-            platform: deviceData.platform,
-            userAgent: deviceData.userAgent,
-            vendor: deviceData.vendor,
-            summary: getDeviceSummary(deviceData)
+      
+      try {
+        await apiRequest('/signup', {
+          method: 'POST',
+          body: {
+            email,
+            password,
+            full_name: fullName,
+            role,
+            university_id: role === 'student' ? universityId : null,
+            device_fingerprint: deviceData.fingerprint,
+            device_info: {
+              platform: deviceData.platform,
+              userAgent: deviceData.userAgent,
+              vendor: deviceData.vendor,
+              summary: getDeviceSummary(deviceData)
+            }
           }
+        });
+        
+        console.log('✅ [AuthContext] Sign up successful via Edge Function');
+      } catch (apiError: any) {
+        // Handle Edge Function not deployed - Use Supabase fallback
+        if (apiError.message === 'EDGE_FUNCTION_NOT_DEPLOYED') {
+          console.warn('⚠️ Edge Function not deployed, using Supabase fallback for signup...');
+          
+          // Create user directly with Supabase
+          console.log('🔐 [AuthContext] Creating user with Supabase Auth...');
+          const { data: authData, error: authError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+              emailRedirectTo: undefined, // Skip email confirmation redirect
+              data: {
+                full_name: fullName,
+                role,
+                university_id: role === 'student' ? universityId : null
+              }
+            }
+          });
+          
+          if (authError) {
+            console.error('❌ [AuthContext] Supabase signup error:', authError);
+            
+            // If user already exists, try to sign in instead
+            if (authError.message.includes('already registered') || authError.message.includes('already exists')) {
+              console.log('⚠️ User already exists, attempting to sign in...');
+              toast.warning('المستخدم موجود مسبقاً / User already exists', {
+                description: 'سنحاول تسجيل الدخول / Attempting to sign in...'
+              });
+              await signIn(email, password);
+              return;
+            }
+            
+            throw new Error(authError.message);
+          }
+          
+          if (!authData.user) {
+            throw new Error('Failed to create user');
+          }
+          
+          console.log('✅ [AuthContext] User created in Auth:', authData.user.id);
+          
+          // Create profile in database
+          console.log('💾 [AuthContext] Creating profile in database...');
+          const { data: profileData, error: profileError } = await supabase
+            .from('profiles')
+            .insert({
+              id: authData.user.id,
+              email,
+              full_name: fullName,
+              role,
+              university_id: role === 'student' ? universityId : null
+            })
+            .select()
+            .single();
+          
+          if (profileError) {
+            console.error('❌ [AuthContext] Profile creation error:', profileError);
+            
+            // If duplicate, try to fetch existing profile
+            if (profileError.code === '23505') {
+              console.log('⚠️ Profile already exists, fetching existing profile...');
+              const { data: existingProfile, error: fetchError } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', authData.user.id)
+                .single();
+              
+              if (fetchError) {
+                console.error('❌ Failed to fetch existing profile:', fetchError);
+                throw new Error('Failed to create profile: Profile already exists but cannot be fetched');
+              }
+              
+              console.log('✅ [AuthContext] Existing profile fetched:', existingProfile);
+            } else {
+              throw new Error('Failed to create profile: ' + profileError.message);
+            }
+          } else {
+            console.log('✅ [AuthContext] Profile created successfully:', profileData);
+          }
+          
+          toast.success('تم إنشاء الحساب بنجاح / Account created successfully');
+        } else {
+          throw apiError;
         }
-      });
+      }
 
       console.log('✅ [AuthContext] Sign up successful');
       toast.success('تم إنشاء الحساب بنجاح / Account created successfully', {
@@ -352,44 +460,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     console.log('🚪 [AuthContext] Sign out initiated');
     
     try {
-      // مسح الجلسة من الخادم
-      if (token) {
-        console.log('🔒 [AuthContext] Clearing device session...');
-        try {
-          await apiRequest('/session/logout', {
-            method: 'POST',
-            token: token
-          });
-          console.log('✅ [AuthContext] Device session cleared');
-        } catch (error) {
-          console.warn('⚠️ [AuthContext] Failed to clear device session:', error);
+      // Skip session clearing (Edge Function not needed)
+      console.log('✅ [AuthContext] Skipping session clearing (working without Edge Function)');
+
+      // Check if there's an active session first
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session) {
+        // Only attempt signOut if session exists
+        console.log('🔑 [AuthContext] Signing out from Supabase...');
+        const { error } = await supabase.auth.signOut();
+        
+        if (error) {
+          // Ignore "Auth session missing" errors during signout
+          if (error.message.includes('Auth session missing') || error.name === 'AuthSessionMissingError') {
+            console.warn('⚠️ [AuthContext] Session already cleared, continuing logout...');
+          } else {
+            console.error('❌ [AuthContext] Supabase sign out error:', error);
+            throw error;
+          }
+        } else {
+          console.log('✅ [AuthContext] Supabase sign out successful');
         }
+      } else {
+        console.log('ℹ️ [AuthContext] No active session to sign out from');
       }
 
-      // تسجيل الخروج من Supabase
-      console.log('🔑 [AuthContext] Signing out from Supabase...');
-      const { error } = await supabase.auth.signOut();
-      
-      if (error) {
-        console.error('❌ [AuthContext] Supabase sign out error:', error);
-        throw error;
-      }
-
-      // مسح البيانات المحلية
+      // Always clear local data regardless of session state
       setUser(null);
       setToken(null);
       setDeviceInfo(null);
       clearFingerprintFromStorage();
       
-      console.log('✅ [AuthContext] Sign out successful');
+      console.log('✅ [AuthContext] Sign out successful - local data cleared');
       toast.success('تم تسجيل الخروج بنجاح / Signed out successfully');
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ [AuthContext] Sign out error:', error);
-      // حتى في حالة الخطأ، نقوم بمسح البيانات المحلية
+      
+      // Always clear local data even if signOut fails
       setUser(null);
       setToken(null);
       setDeviceInfo(null);
       clearFingerprintFromStorage();
+      
+      // Show success message anyway since local data is cleared
+      toast.success('تم تسجيل الخروج بنجاح / Signed out successfully');
     }
   };
 

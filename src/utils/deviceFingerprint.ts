@@ -237,14 +237,20 @@ async function getGeolocation(): Promise<{ latitude: number; longitude: number; 
  */
 async function getIPAddress(): Promise<string | null> {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+    
     const response = await fetch('https://api.ipify.org?format=json', {
       method: 'GET',
-      cache: 'no-cache'
+      cache: 'no-cache',
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
+    
     const data = await response.json();
     return data.ip || null;
-  } catch (e) {
-    console.warn('Failed to get IP address:', e);
+  } catch (e: any) {
+    // Silent - IP detection is optional
     return null;
   }
 }

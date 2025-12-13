@@ -146,7 +146,7 @@ export function NFCAttendance({ onSuccess }: NFCAttendanceProps) {
       console.log('🔵 [NFC] Submitting attendance with code:', code);
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/attend`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/attend`,
         {
           method: 'POST',
           headers: {

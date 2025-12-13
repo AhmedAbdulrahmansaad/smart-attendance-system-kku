@@ -71,7 +71,7 @@ export function SystemHealthCheck() {
     // 2. Check Backend Health
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/health`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/health`,
         {
           headers: {
             'Authorization': `Bearer ${publicAnonKey}`
@@ -108,7 +108,7 @@ export function SystemHealthCheck() {
     try {
       const startTime = Date.now();
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/server/server/health`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/health`,
         {
           headers: {
             'Authorization': `Bearer ${publicAnonKey}`
@@ -142,7 +142,7 @@ export function SystemHealthCheck() {
     try {
       // Try to make a simple API call that uses the database
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/health`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/health`,
         {
           headers: {
             'Authorization': `Bearer ${publicAnonKey}`

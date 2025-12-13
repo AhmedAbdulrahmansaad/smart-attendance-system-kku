@@ -44,7 +44,7 @@ export function BackendHealthCheck() {
     });
 
     // Test 2: Check Health Endpoint
-    const healthUrl = `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/health`;
+    const healthUrl = `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/health`;
     try {
       console.log('🏥 Testing health endpoint:', healthUrl);
       const response = await fetch(healthUrl, {
@@ -95,7 +95,7 @@ export function BackendHealthCheck() {
 
     // Test 4: Test /sessions endpoint (if logged in)
     if (accessToken) {
-      const sessionsUrl = `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/sessions`;
+      const sessionsUrl = `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/sessions`;
       try {
         console.log('📡 Testing sessions endpoint:', sessionsUrl);
         const response = await fetch(sessionsUrl, {
