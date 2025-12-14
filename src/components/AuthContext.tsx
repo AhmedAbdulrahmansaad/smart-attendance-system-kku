@@ -304,8 +304,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setDeviceInfo(deviceData);
 
       // التحقق من صحة البيانات
+      // 1. التحقق من نطاق البريد الجامعي
       if (!email.endsWith('@kku.edu.sa')) {
         throw new Error('يجب استخدام البريد الجامعي @kku.edu.sa\nMust use university email @kku.edu.sa');
+      }
+
+      // 2. التحقق من صيغة البريد الإلكتروني
+      const emailRegex = /^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?@kku\.edu\.sa$/;
+      if (!emailRegex.test(email)) {
+        throw new Error('صيغة البريد الإلكتروني غير صالحة. تجنب النقاط المتتالية (..) والرموز في البداية أو النهاية\nInvalid email format. Avoid consecutive dots (..) and symbols at start/end');
+      }
+
+      // 3. التحقق من النقاط المتتالية
+      if (email.includes('..')) {
+        throw new Error('البريد الإلكتروني لا يمكن أن يحتوي على نقطتين متتاليتين (..)\nEmail cannot contain consecutive dots (..)');
       }
 
       // التحقق من الاسم الكامل (يجب أن يحتوي على اسمين على الأقل)
@@ -330,21 +342,91 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Use Edge Function /signup endpoint
+      // Use Edge Function /signup endpoint with Fallback
       console.log('🌐 [AuthContext] Calling /signup endpoint...');
       
-      const response = await apiRequest('/signup', {
-        method: 'POST',
-        body: {
-          email,
-          password,
-          full_name: fullName,
-          role,
-          university_id: role === 'student' ? universityId : null
+      let response;
+      try {
+        response = await apiRequest('/signup', {
+          method: 'POST',
+          body: {
+            email,
+            password,
+            full_name: fullName,
+            role,
+            university_id: role === 'student' ? universityId : null
+          }
+        });
+        
+        console.log('✅ [AuthContext] Sign up successful via Edge Function:', response);
+      } catch (apiError: any) {
+        // If Edge Function is not deployed, use Fallback with Supabase directly
+        if (apiError.message === 'EDGE_FUNCTION_NOT_DEPLOYED') {
+          console.log('⚠️ [Fallback] Edge Function not available, using Supabase Auth directly');
+          
+          // Create user in Supabase Auth with auto-confirmation
+          const { data: authData, error: authError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+              // Auto-confirm email (skip email verification)
+              emailRedirectTo: undefined,
+              data: {
+                full_name: fullName,
+                role,
+                university_id: role === 'student' ? universityId : null
+              }
+            }
+          });
+          
+          if (authError) {
+            console.error('❌ [Fallback] Supabase auth error:', authError);
+            throw new Error(authError.message);
+          }
+          
+          if (!authData.user) {
+            throw new Error('Failed to create user');
+          }
+          
+          console.log('✅ [Fallback] User created in Supabase Auth:', authData.user.id);
+          
+          // IMPORTANT: Wait a bit for Auth to settle
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          // Create profile in profiles table
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .insert({
+              id: authData.user.id,
+              email,
+              full_name: fullName,
+              role,
+              university_id: role === 'student' ? universityId : null
+            });
+          
+          if (profileError) {
+            console.error('❌ [Fallback] Profile creation error:', profileError);
+            
+            // If foreign key error, user wasn't created properly
+            if (profileError.code === '23503') {
+              throw new Error('فشل إنشاء المستخدم. يرجى تفعيل Auto-Confirm في Supabase Settings\nFailed to create user. Please enable Auto-Confirm in Supabase Settings');
+            }
+            
+            // Check for duplicate errors
+            if (profileError.code === '23505') {
+              throw new Error('Email already registered');
+            }
+            
+            throw new Error(profileError.message);
+          }
+          
+          console.log('✅ [Fallback] Profile created in database');
+          
+          response = { success: true, message: 'Account created successfully' };
+        } else {
+          throw apiError;
         }
-      });
-      
-      console.log('✅ [AuthContext] Sign up successful via Edge Function:', response);
+      }
       
       // تسجيل الدخول تلقائياً
       toast.success('تم إنشاء الحساب بنجاح! / Account created successfully!', {
