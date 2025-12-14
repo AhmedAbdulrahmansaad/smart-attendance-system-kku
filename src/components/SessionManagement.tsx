@@ -31,6 +31,7 @@ import { useAuth } from './AuthContext';
 import { LiveStreamHost } from './LiveStreamHost';
 import { toast } from 'sonner';
 import { apiRequest } from '../utils/api';
+import { projectId, publicAnonKey } from '../utils/supabase/info';
 import { 
   getCourses, 
   getSessions, 
@@ -311,14 +312,54 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
         return;
       }
 
-      // Call the backend to start the live session
-      const result = await apiRequest(`/live-sessions/${session.id}/start`, {
-        method: 'POST',
-        token: token,
-      });
+      // Try to call the backend API first
+      let result;
+      try {
+        result = await apiRequest(`/live-sessions/${session.id}/start`, {
+          method: 'POST',
+          token: token,
+        });
+        console.log('✅ Live session started via API:', result);
+      } catch (apiError: any) {
+        // If Edge Function is not deployed, use fallback with Supabase Client
+        if (apiError.message === 'EDGE_FUNCTION_NOT_DEPLOYED') {
+          console.log('⚠️ [Fallback] Edge Function not available, using Supabase Client directly');
+          
+          // Generate meeting URL and attendance code locally
+          const roomName = `kku-session-${session.id.substring(0, 8)}-${Date.now()}`;
+          const meetingUrl = `https://meet.jit.si/${roomName}`;
+          const attendanceCode = session.code || Math.random().toString(36).substring(2, 8).toUpperCase();
+          
+          // Update session in database directly using existing Supabase Client (singleton)
+          // Only update columns that exist in the sessions table
+          const { error: updateError } = await supabase
+            .from('sessions')
+            .update({ 
+              stream_active: true,
+              is_active: true
+            })
+            .eq('id', session.id);
+          
+          if (updateError) {
+            console.error('❌ [Fallback] Failed to update session:', updateError);
+            throw new Error('Failed to update session in database');
+          }
+          
+          console.log('✅ [Fallback] Live session started with Supabase Client');
+          
+          result = {
+            session: {
+              id: session.id,
+              meeting_url: meetingUrl,
+              attendance_code: attendanceCode,
+              room_name: roomName,
+            }
+          };
+        } else {
+          throw apiError;
+        }
+      }
 
-      console.log('✅ Live session started:', result);
-      
       // Update the session with meeting URL and attendance code
       const updatedSession = {
         ...session,
@@ -330,6 +371,9 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     } catch (err: any) {
       console.error('❌ Error starting live stream:', err);
       setError(err.message || 'فشل بدء البث المباشر');
+      toast.error('فشل بدء البث المباشر', {
+        description: err.message
+      });
     }
   };
 
@@ -341,17 +385,47 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
       
       if (!token) return;
 
-      await apiRequest(`/live-sessions/${activeStreamSession.id}/end`, {
-        method: 'POST',
-        token: token,
-      });
+      // Try to call the backend API first
+      try {
+        await apiRequest(`/live-sessions/${activeStreamSession.id}/end`, {
+          method: 'POST',
+          token: token,
+        });
+        console.log('✅ Live session ended via API');
+      } catch (apiError: any) {
+        // If Edge Function is not deployed, use fallback with Supabase Client
+        if (apiError.message === 'EDGE_FUNCTION_NOT_DEPLOYED') {
+          console.log('⚠️ [Fallback] Edge Function not available, using Supabase Client directly');
+          
+          // Update session in database directly using existing Supabase Client (singleton)
+          const { error: updateError } = await supabase
+            .from('sessions')
+            .update({ 
+              stream_active: false,
+              is_active: false
+            })
+            .eq('id', activeStreamSession.id);
+          
+          if (updateError) {
+            console.error('❌ [Fallback] Failed to update session:', updateError);
+            throw new Error('Failed to update session in database');
+          }
+          
+          console.log('✅ [Fallback] Live session ended with Supabase Client');
+        } else {
+          throw apiError;
+        }
+      }
 
-      console.log('✅ Live session ended');
       setActiveStreamSession(null);
+      toast.success('تم إيقاف البث المباشر بنجاح / Live stream ended successfully');
       await loadAllSessions();
     } catch (err: any) {
       console.error('❌ Error stopping live stream:', err);
       setError(err.message || 'فشل إيقاف البث المباشر');
+      toast.error('فشل إيقاف البث المباشر', {
+        description: err.message
+      });
       // Still close the dialog even if the API call fails
       setActiveStreamSession(null);
     }

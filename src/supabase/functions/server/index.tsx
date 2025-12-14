@@ -69,6 +69,30 @@ function generateSessionCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
+// ==================== HEALTH CHECK ====================
+
+// Health check endpoint (no auth required)
+app.get("/make-server-90ad488b/health", async (c) => {
+  return c.json({ 
+    status: "healthy", 
+    message: "Server is running",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Root endpoint
+app.get("/", async (c) => {
+  return c.json({ 
+    message: "KKU Attendance System API",
+    status: "running",
+    endpoints: {
+      health: "/make-server-90ad488b/health",
+      signup: "/make-server-90ad488b/signup",
+      me: "/make-server-90ad488b/me",
+    }
+  });
+});
+
 // ==================== AUTH ENDPOINTS ====================
 
 // Sign up endpoint

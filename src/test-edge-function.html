@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اختبار Edge Function - جامعة الملك خالد</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #006747;
+            text-align: center;
+        }
+        button {
+            background: #006747;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+            margin: 10px 0;
+        }
+        button:hover {
+            background: #005537;
+        }
+        .result {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        .error {
+            background: #f8d7da;
+            border-left: 4px solid #dc3545;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        .info {
+            background: #d1ecf1;
+            border-left: 4px solid #0c5460;
+            padding: 15px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 اختبار Edge Function</h1>
+    
+    <div class="card">
+        <h2>معلومات المشروع</h2>
+        <div class="info">
+            <strong>Project ID:</strong> pcymgqdjbdklrikdquih<br>
+            <strong>Base URL:</strong> https://pcymgqdjbdklrikdquih.supabase.co<br>
+            <strong>Function Name:</strong> server<br>
+            <strong>Health URL:</strong> https://pcymgqdjbdklrikdquih.supabase.co/functions/v1/server/make-server-90ad488b/health
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>الاختبارات</h2>
+        
+        <button onclick="testBasic()">
+            🔍 Test 1: Basic Function Check
+        </button>
+        <div id="result1" class="result" style="display:none;"></div>
+
+        <button onclick="testHealth()">
+            ❤️ Test 2: Health Check
+        </button>
+        <div id="result2" class="result" style="display:none;"></div>
+
+        <button onclick="testPublicStats()">
+            📊 Test 3: Public Stats
+        </button>
+        <div id="result3" class="result" style="display:none;"></div>
+
+        <button onclick="testAll()">
+            🚀 Run All Tests
+        </button>
+    </div>
+
+    <div class="card">
+        <h2>النتائج</h2>
+        <div id="summary"></div>
+    </div>
+
+    <script>
+        const BASE_URL = 'https://pcymgqdjbdklrikdquih.supabase.co';
+        
+        function showResult(id, content, type = 'info') {
+            const el = document.getElementById(id);
+            el.style.display = 'block';
+            el.className = `result ${type}`;
+            el.textContent = content;
+        }
+
+        async function testBasic() {
+            showResult('result1', '⏳ Testing basic function access...', 'info');
+            try {
+                const response = await fetch(`${BASE_URL}/functions/v1/server`);
+                const status = response.status;
+                const text = await response.text();
+                
+                const result = `Status: ${status}\nResponse:\n${text}`;
+                showResult('result1', result, status === 200 || status === 404 ? 'success' : 'error');
+                return status === 200 || status === 404;
+            } catch (error) {
+                showResult('result1', `❌ Error: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        async function testHealth() {
+            showResult('result2', '⏳ Testing health endpoint...', 'info');
+            try {
+                const response = await fetch(`${BASE_URL}/functions/v1/server/make-server-90ad488b/health`);
+                const status = response.status;
+                const data = await response.json();
+                
+                const result = `Status: ${status}\nResponse:\n${JSON.stringify(data, null, 2)}`;
+                showResult('result2', result, status === 200 ? 'success' : 'error');
+                return status === 200;
+            } catch (error) {
+                showResult('result2', `❌ Error: ${error.message}\n\nهذا يعني أن Edge Function غير deployed أو URL خاطئ`, 'error');
+                return false;
+            }
+        }
+
+        async function testPublicStats() {
+            showResult('result3', '⏳ Testing public stats endpoint...', 'info');
+            try {
+                const response = await fetch(`${BASE_URL}/functions/v1/server/make-server-90ad488b/stats/public`);
+                const status = response.status;
+                const data = await response.json();
+                
+                const result = `Status: ${status}\nResponse:\n${JSON.stringify(data, null, 2)}`;
+                showResult('result3', result, status === 200 ? 'success' : 'error');
+                return status === 200;
+            } catch (error) {
+                showResult('result3', `❌ Error: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        async function testAll() {
+            document.getElementById('summary').innerHTML = '<div class="info">⏳ جاري تشغيل جميع الاختبارات...</div>';
+            
+            const results = [];
+            
+            results.push(await testBasic());
+            await new Promise(r => setTimeout(r, 500));
+            
+            results.push(await testHealth());
+            await new Promise(r => setTimeout(r, 500));
+            
+            results.push(await testPublicStats());
+            
+            const passed = results.filter(r => r).length;
+            const total = results.length;
+            
+            let summaryHtml = `<h3>النتيجة النهائية</h3>`;
+            summaryHtml += `<div class="${passed === total ? 'success' : 'error'}">`;
+            summaryHtml += `<strong>نجح ${passed} من ${total} اختبار</strong><br><br>`;
+            
+            if (passed === total) {
+                summaryHtml += `✅ جميع الاختبارات نجحت!<br>`;
+                summaryHtml += `✅ Edge Function deployed بنجاح<br>`;
+                summaryHtml += `✅ النظام جاهز للاستخدام<br><br>`;
+                summaryHtml += `<strong>الخطوة التالية:</strong><br>`;
+                summaryHtml += `1. ارجع للتطبيق<br>`;
+                summaryHtml += `2. سجل دخول كمدرس<br>`;
+                summaryHtml += `3. جرّب إنشاء جلسة بث مباشر<br>`;
+                summaryHtml += `4. يجب أن يعمل الآن! 🎉`;
+            } else if (passed >= 1) {
+                summaryHtml += `⚠️ بعض الاختبارات نجحت<br>`;
+                summaryHtml += `⚠️ Edge Function موجود لكن بعض الـ endpoints لا تعمل<br><br>`;
+                summaryHtml += `<strong>الحل:</strong><br>`;
+                summaryHtml += `1. تحقق من Environment Variables في Supabase<br>`;
+                summaryHtml += `2. تحقق من الـ database schema<br>`;
+                summaryHtml += `3. افحص Logs في Supabase Dashboard`;
+            } else {
+                summaryHtml += `❌ جميع الاختبارات فشلت<br>`;
+                summaryHtml += `❌ Edge Function غير deployed<br><br>`;
+                summaryHtml += `<strong>الحل:</strong><br>`;
+                summaryHtml += `1. اذهب لـ Supabase Dashboard<br>`;
+                summaryHtml += `2. Edge Functions > New Function<br>`;
+                summaryHtml += `3. Name: server<br>`;
+                summaryHtml += `4. انسخ الكود من /supabase/functions/server/index.tsx<br>`;
+                summaryHtml += `5. اضغط Deploy<br>`;
+                summaryHtml += `6. أضف Environment Variables<br>`;
+                summaryHtml += `7. أعد تشغيل الاختبارات`;
+            }
+            
+            summaryHtml += `</div>`;
+            document.getElementById('summary').innerHTML = summaryHtml;
+        }
+    </script>
+</body>
+</html>
