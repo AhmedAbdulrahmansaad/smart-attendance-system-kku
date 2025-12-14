@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../utils/supabaseClient';
+import { projectId, publicAnonKey } from '../utils/supabase/info';
 import { toast } from 'sonner@2.0.3';
 
 interface InitialSetupProps {
@@ -66,62 +67,43 @@ export function InitialSetup({ onSetupComplete }: InitialSetupProps) {
     try {
       console.log('🚀 [InitialSetup] Creating initial admin user...');
 
-      // 1. Create user in Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
+      // استخدام backend endpoint مباشرة
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/signup`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${publicAnonKey}`
+          },
+          body: JSON.stringify({
+            email,
+            password,
             full_name: fullName,
             role: 'admin'
-          }
+          })
         }
-      });
+      );
 
-      if (authError) {
-        console.error('❌ [InitialSetup] Auth error:', authError);
-        throw new Error(authError.message);
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('❌ [InitialSetup] Backend error:', errorData);
+        throw new Error(errorData.error || errorData.messageAr || 'Failed to create user');
       }
 
-      if (!authData.user) {
-        throw new Error('Failed to create user');
-      }
-
-      console.log('✅ [InitialSetup] User created in Auth:', authData.user.id);
-
-      // 2. Create profile in database
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
-          email,
-          full_name: fullName,
-          role: 'admin'
-        })
-        .select()
-        .single();
-
-      if (profileError) {
-        console.error('❌ [InitialSetup] Profile error:', profileError);
-        
-        // If duplicate, that's OK
-        if (profileError.code !== '23505') {
-          throw new Error('Failed to create profile: ' + profileError.message);
-        }
-      }
-
-      console.log('✅ [InitialSetup] Profile created:', profileData);
+      const data = await response.json();
+      console.log('✅ [InitialSetup] User created successfully:', data);
 
       setStep('done');
       
       toast.success('تم إنشاء المستخدم بنجاح! / User created successfully!', {
-        description: 'سيتم تسجيل الدخول تلقائياً / Auto-login in progress...'
+        description: 'سيتم تسجيل الدخول تلقائياً / Logging in automatically...'
       });
 
-      // Auto-login after 2 seconds
+      // تسجيل الدخول تلقائياً
       setTimeout(async () => {
         try {
-          const { error: signInError } = await supabase.auth.signInWithPassword({
+          const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
             email,
             password,
           });
@@ -131,6 +113,13 @@ export function InitialSetup({ onSetupComplete }: InitialSetupProps) {
             toast.error('فشل تسجيل الدخول / Login failed', {
               description: 'يرجى تسجيل الدخول يدوياً / Please login manually'
             });
+            setTimeout(() => onSetupComplete(), 2000);
+            return;
+          }
+
+          if (signInData.session) {
+            console.log('✅ [InitialSetup] Signed in successfully');
+            toast.success('تم تسجيل الدخول بنجاح! / Logged in successfully!');
           }
 
           onSetupComplete();
@@ -145,7 +134,7 @@ export function InitialSetup({ onSetupComplete }: InitialSetupProps) {
       toast.error('فشل إنشاء المستخدم / Failed to create user', {
         description: error.message
       });
-      setStep('welcome');
+      setStep('error');
       setLoading(false);
     }
   };
@@ -286,7 +275,7 @@ export function InitialSetup({ onSetupComplete }: InitialSetupProps) {
                 
                 <div className="bg-orange-100 dark:bg-orange-950 border border-orange-300 dark:border-orange-800 rounded-lg p-4 mt-4">
                   <p className="text-orange-900 dark:text-orange-100 font-semibold mb-2">
-                    🔧 يجب إصلاح السياسات!
+                    🔧 يجب إصلاح الياسات!
                   </p>
                   <p className="text-orange-800 dark:text-orange-200 text-sm mb-3">
                     You MUST fix the RLS policies!

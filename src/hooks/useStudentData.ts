@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { supabase } from '../utils/supabaseClient';
+import { getCourses, getSessions, getAttendance } from '../utils/apiWithFallback';
 
 interface UseStudentDataOptions {
   token: string | null;
@@ -15,63 +16,27 @@ export function useStudentCourses({ token, userId, enabled = true }: UseStudentD
       if (!token || !userId) throw new Error('No token or userId');
       
       try {
-        console.log('📚 [useStudentCourses] Loading courses for student:', userId);
+        console.log('📚 [useStudentCourses] Loading courses via Fallback system...');
         
-        // Get enrollments for this student with course details
-        const { data: enrollments, error } = await supabase
-          .from('enrollments')
-          .select(`
-            course_id,
-            courses (
-              id,
-              course_code,
-              course_name,
-              instructor_id,
-              semester,
-              year
-            )
-          `)
-          .eq('student_id', userId);
+        // استخدام Fallback system - Backend أو Supabase مباشر
+        const courses = await getCourses(token);
 
-        if (error) {
-          console.error('❌ [useStudentCourses] Error:', error);
-          throw error;
-        }
-
-        if (!enrollments || enrollments.length === 0) {
-          console.log('⚠️ [useStudentCourses] No enrollments found');
+        if (!courses || courses.length === 0) {
+          console.log('⚠️ [useStudentCourses] No courses found');
           return [];
         }
 
-        // Get instructor names
-        const instructorIds = enrollments
-          .map((e: any) => e.courses?.instructor_id)
-          .filter((id: string) => id);
-
-        const { data: instructors } = await supabase
-          .from('profiles')
-          .select('id, full_name')
-          .in('id', instructorIds);
-
-        const instructorMap = new Map(
-          instructors?.map((i: any) => [i.id, i.full_name]) || []
-        );
-
         // Map to simplified structure
-        const courses = enrollments
-          .filter((e: any) => e.courses) // Filter out invalid enrollments
-          .map((e: any) => ({
-            id: e.courses.id,
-            code: e.courses.course_code,
-            name: e.courses.course_name,
-            instructor_id: e.courses.instructor_id,
-            instructor_name: instructorMap.get(e.courses.instructor_id) || 'Unknown',
-            semester: e.courses.semester,
-            year: e.courses.year,
-          }));
+        const mappedCourses = courses.map((course: any) => ({
+          id: course.id,
+          code: course.course_code,
+          name: course.course_name,
+          instructor_id: course.instructor_id,
+          instructor_name: course.instructor?.full_name || 'Unknown',
+        }));
 
-        console.log('✅ [useStudentCourses] Loaded', courses.length, 'courses');
-        return courses;
+        console.log('✅ [useStudentCourses] Loaded', mappedCourses.length, 'courses');
+        return mappedCourses;
       } catch (error: any) {
         console.error('❌ [useStudentCourses] Error:', error);
         throw error;
@@ -133,40 +98,28 @@ export function useStudentSessions({ token, courseIds, enabled = true }: { token
       if (!courseIds || courseIds.length === 0) return [];
       
       try {
-        console.log('📅 [useStudentSessions] Loading sessions for', courseIds.length, 'courses');
+        console.log('📅 [useStudentSessions] Loading sessions via Fallback system...');
         
-        // Get all sessions for student's courses
-        const { data: sessions, error } = await supabase
-          .from('sessions')
-          .select(`
-            id,
-            course_id,
-            session_date,
-            session_type,
-            title,
-            active,
-            expires_at,
-            courses (
-              course_code,
-              course_name
-            )
-          `)
-          .in('course_id', courseIds)
-          .order('session_date', { ascending: false })
-          .limit(50);
+        // استخدام Fallback system - Backend أو Supabase مباشر
+        const sessions = await getSessions(undefined, token);
 
-        if (error) {
-          console.error('❌ [useStudentSessions] Error:', error);
-          throw error;
+        if (!sessions || sessions.length === 0) {
+          console.log('⚠️ [useStudentSessions] No sessions found');
+          return [];
         }
 
+        // Filter sessions for student's courses
+        const filteredSessions = sessions.filter((s: any) => 
+          courseIds.includes(s.course_id)
+        );
+
         // Map to simplified structure
-        const mappedSessions = (sessions || []).map((s: any) => ({
+        const mappedSessions = filteredSessions.map((s: any) => ({
           id: s.id,
           course_id: s.course_id,
-          course_name: s.courses?.course_name || 'Unknown',
-          course_code: s.courses?.course_code || 'N/A',
-          date: s.session_date,
+          course_name: s.course?.course_name || 'Unknown',
+          course_code: s.course?.course_code || 'N/A',
+          date: s.created_at,
           session_type: s.session_type,
           title: s.title,
           active: s.active,
@@ -195,28 +148,23 @@ export function useStudentAttendance({ token, userId, enabled = true }: UseStude
       if (!token || !userId) throw new Error('No token or userId');
       
       try {
-        console.log('✅ [useStudentAttendance] Loading attendance for student:', userId);
+        console.log('✅ [useStudentAttendance] Loading attendance via Fallback system...');
         
-        // Get all attendance records for this student
-        const { data: attendance, error } = await supabase
-          .from('attendance')
-          .select('id, session_id, student_id, status, recorded_at, course_id')
-          .eq('student_id', userId)
-          .order('recorded_at', { ascending: false })
-          .limit(100);
+        // استخدام Fallback system - Backend أو Supabase مباشر
+        const attendance = await getAttendance({ student_id: userId }, token);
 
-        if (error) {
-          console.error('❌ [useStudentAttendance] Error:', error);
-          throw error;
+        if (!attendance || attendance.length === 0) {
+          console.log('⚠️ [useStudentAttendance] No attendance found');
+          return [];
         }
 
         // Map to simplified structure
-        const mappedAttendance = (attendance || []).map((a: any) => ({
+        const mappedAttendance = attendance.map((a: any) => ({
           id: a.id,
           session_id: a.session_id,
           student_id: a.student_id,
           status: a.status,
-          date: a.recorded_at,
+          date: a.created_at, // استخدم created_at بدلاً من timestamp
           course_id: a.course_id,
         }));
 

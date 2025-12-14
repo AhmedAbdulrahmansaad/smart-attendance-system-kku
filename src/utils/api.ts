@@ -1,9 +1,11 @@
 import { projectId, publicAnonKey } from './supabase/info';
 
-// Edge Function is deployed as 'server' on Supabase
-// All routes must be prefixed with /make-server-90ad488b
-// Correct URL format: https://PROJECT_ID.supabase.co/functions/v1/make-server-90ad488b/<route>
-const BASE_URL = `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b`;
+// Edge Function routes are prefixed with /make-server-90ad488b
+// Correct URL: https://PROJECT_ID.supabase.co/functions/v1/make-server-90ad488b/route
+// The Edge Function is deployed as 'server', so the function endpoint is:
+// https://PROJECT_ID.supabase.co/functions/v1/server
+// But routes inside are /make-server-90ad488b/..., so we use the full path
+const BASE_URL = `https://${projectId}.supabase.co/functions/v1`;
 
 export async function apiRequest(
   endpoint: string,
@@ -30,10 +32,15 @@ export async function apiRequest(
   }
 
   try {
-    // Silent mode - don't log unless needed for debugging
+    // Ensure endpoint starts with /make-server-90ad488b
+    const formattedEndpoint = endpoint.startsWith('/make-server-90ad488b') 
+      ? endpoint 
+      : `/make-server-90ad488b${endpoint}`;
     
-    const url = `${BASE_URL}${endpoint}`;
-
+    // Log the full URL for debugging
+    const url = `${BASE_URL}${formattedEndpoint}`;
+    console.log(`🌐 [API] ${method} ${url}`);
+    
     // Add timeout to fetch request
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
@@ -47,6 +54,7 @@ export async function apiRequest(
       
       // Handle 404 - Edge Function not deployed (silent)
       if (response.status === 404) {
+        console.error('❌ [API] 404 - Edge Function not found at:', url);
         throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
       
@@ -56,19 +64,35 @@ export async function apiRequest(
       if (contentType && contentType.includes('application/json')) {
         data = await response.json();
       } else {
+        console.error('❌ [API] Non-JSON response from:', url);
         throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
       
       if (!response.ok) {
+        console.error(`❌ [API] ${response.status} Error:`, data.error || data);
         throw new Error(data.error || 'API request failed');
       }
       
+      console.log(`✅ [API] ${method} ${url} - Success`);
       return data;
     } catch (fetchError: any) {
       clearTimeout(timeoutId);
+      
+      // Handle all network errors as "Edge Function not deployed"
       if (fetchError.name === 'AbortError') {
+        console.error('❌ [API] Timeout after 10s:', url);
         throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
+      
+      // Handle "Failed to fetch" - network error
+      if (fetchError.message.includes('Failed to fetch') || 
+          fetchError.message.includes('fetch failed') ||
+          fetchError.message.includes('NetworkError')) {
+        console.error('❌ [API] Network error (Failed to fetch):', url);
+        throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
+      }
+      
+      console.error('❌ [API] Fetch error:', fetchError.message);
       throw fetchError;
     }
   } catch (err: any) {

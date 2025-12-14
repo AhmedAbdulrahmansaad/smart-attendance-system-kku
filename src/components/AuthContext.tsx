@@ -330,129 +330,58 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Try Edge Function first
+      // Use Edge Function /signup endpoint
       console.log('🌐 [AuthContext] Calling /signup endpoint...');
       
-      try {
-        await apiRequest('/signup', {
-          method: 'POST',
-          body: {
-            email,
-            password,
-            full_name: fullName,
-            role,
-            university_id: role === 'student' ? universityId : null,
-            device_fingerprint: deviceData.fingerprint,
-            device_info: {
-              platform: deviceData.platform,
-              userAgent: deviceData.userAgent,
-              vendor: deviceData.vendor,
-              summary: getDeviceSummary(deviceData)
-            }
-          }
-        });
-        
-        console.log('✅ [AuthContext] Sign up successful via Edge Function');
-      } catch (apiError: any) {
-        // Handle Edge Function not deployed - Use Supabase fallback
-        if (apiError.message === 'EDGE_FUNCTION_NOT_DEPLOYED') {
-          console.warn('⚠️ Edge Function not deployed, using Supabase fallback for signup...');
-          
-          // Create user directly with Supabase
-          console.log('🔐 [AuthContext] Creating user with Supabase Auth...');
-          const { data: authData, error: authError } = await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-              emailRedirectTo: undefined, // Skip email confirmation redirect
-              data: {
-                full_name: fullName,
-                role,
-                university_id: role === 'student' ? universityId : null
-              }
-            }
-          });
-          
-          if (authError) {
-            console.error('❌ [AuthContext] Supabase signup error:', authError);
-            
-            // If user already exists, try to sign in instead
-            if (authError.message.includes('already registered') || authError.message.includes('already exists')) {
-              console.log('⚠️ User already exists, attempting to sign in...');
-              toast.warning('المستخدم موجود مسبقاً / User already exists', {
-                description: 'سنحاول تسجيل الدخول / Attempting to sign in...'
-              });
-              await signIn(email, password);
-              return;
-            }
-            
-            throw new Error(authError.message);
-          }
-          
-          if (!authData.user) {
-            throw new Error('Failed to create user');
-          }
-          
-          console.log('✅ [AuthContext] User created in Auth:', authData.user.id);
-          
-          // Create profile in database
-          console.log('💾 [AuthContext] Creating profile in database...');
-          const { data: profileData, error: profileError } = await supabase
-            .from('profiles')
-            .insert({
-              id: authData.user.id,
-              email,
-              full_name: fullName,
-              role,
-              university_id: role === 'student' ? universityId : null
-            })
-            .select()
-            .single();
-          
-          if (profileError) {
-            console.error('❌ [AuthContext] Profile creation error:', profileError);
-            
-            // If duplicate, try to fetch existing profile
-            if (profileError.code === '23505') {
-              console.log('⚠️ Profile already exists, fetching existing profile...');
-              const { data: existingProfile, error: fetchError } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', authData.user.id)
-                .single();
-              
-              if (fetchError) {
-                console.error('❌ Failed to fetch existing profile:', fetchError);
-                throw new Error('Failed to create profile: Profile already exists but cannot be fetched');
-              }
-              
-              console.log('✅ [AuthContext] Existing profile fetched:', existingProfile);
-            } else {
-              throw new Error('Failed to create profile: ' + profileError.message);
-            }
-          } else {
-            console.log('✅ [AuthContext] Profile created successfully:', profileData);
-          }
-          
-          toast.success('تم إنشاء الحساب بنجاح / Account created successfully');
-        } else {
-          throw apiError;
+      const response = await apiRequest('/signup', {
+        method: 'POST',
+        body: {
+          email,
+          password,
+          full_name: fullName,
+          role,
+          university_id: role === 'student' ? universityId : null
         }
-      }
-
-      console.log('✅ [AuthContext] Sign up successful');
-      toast.success('تم إنشاء الحساب بنجاح / Account created successfully', {
-        description: 'يمكنك الآن تسجيل الدخول / You can now sign in'
       });
-
-      // تسجيل الدخول تلقائياً بعد التسجيل
+      
+      console.log('✅ [AuthContext] Sign up successful via Edge Function:', response);
+      
+      // تسجيل الدخول تلقائياً
+      toast.success('تم إنشاء الحساب بنجاح! / Account created successfully!', {
+        description: 'جاري تسجيل الدخول... / Logging in...'
+      });
+      
+      // Auto sign in
       await signIn(email, password);
+      
     } catch (error: any) {
       console.error('❌ [AuthContext] Sign up error:', error);
+      
+      // Handle specific error messages
+      let errorMessage = error.message || 'فشل إنشاء الحساب\nSign up failed';
+      
+      // Check for common errors
+      if (error.message?.includes('already registered') || error.message?.includes('already exists') || error.message?.includes('duplicate key')) {
+        errorMessage = 'هذا البريد مسجل مسبقاً. الرجاء استخدام تسجيل الدخول.\nEmail already registered. Please use Sign In.';
+        
+        toast.error('البريد مسجل مسبقاً / Email already registered', {
+          description: errorMessage,
+          duration: 5000
+        });
+        
+        throw new Error(errorMessage);
+      }
+      
+      if (error.message?.includes('University ID already registered')) {
+        errorMessage = 'هذا الرقم الجامعي مسجل مسبقاً\nUniversity ID already registered';
+      }
+      
       toast.error('فشل إنشاء الحساب / Sign up failed', {
-        description: error.message
+        description: errorMessage,
+        duration: 5000
       });
-      throw error;
+      
+      throw new Error(errorMessage);
     }
   };
 

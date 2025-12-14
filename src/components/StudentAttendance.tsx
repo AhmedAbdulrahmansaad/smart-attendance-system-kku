@@ -12,6 +12,7 @@ import { NFCAttendance } from './NFCAttendance';
 import { useAuth } from './AuthContext';
 import { useLanguage } from './LanguageContext';
 import { supabase } from '../utils/supabaseClient';
+import { getSessions } from '../utils/apiWithFallback';
 import { toast } from 'sonner';
 
 interface Session {
@@ -28,6 +29,13 @@ interface Session {
   course_name?: string;
   course_code?: string;
   instructor_name?: string;
+  instructor_id?: string;
+}
+
+interface Course {
+  id: string;
+  course_name: string;
+  course_code: string;
   instructor_id?: string;
 }
 
@@ -202,10 +210,7 @@ export function StudentAttendance() {
       console.log('✅ [Student] Using fresh token to fetch sessions');
 
       // Fetch live sessions from API
-      const response = await apiRequest('/sessions', {
-        method: 'GET',
-        token: freshToken
-      });
+      const response = await getSessions(freshToken);
 
       console.log('📦 [Student] API Response:', response);
 
@@ -229,10 +234,7 @@ export function StudentAttendance() {
           if (!error && data.session) {
             console.log('✅ [Student] Session refreshed, retrying...');
             // Retry once with new token
-            const response = await apiRequest('/sessions', {
-              method: 'GET',
-              token: data.session.access_token
-            });
+            const response = await getSessions(data.session.access_token);
             const { sessions = [], courses: userCourses = [] } = response.data || {};
             setLiveSessions(sessions);
             setCourses(userCourses);

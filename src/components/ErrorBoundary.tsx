@@ -1,7 +1,7 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { Button } from './ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
@@ -15,22 +15,22 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  public state: State = {
-    hasError: false,
-    error: null,
-    errorInfo: null,
-  };
-
-  public static getDerivedStateFromError(error: Error): State {
-    return {
-      hasError: true,
-      error,
+  constructor(props: Props) {
+    super(props);
+    this.state = {
+      hasError: false,
+      error: null,
       errorInfo: null,
     };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('❌ ErrorBoundary caught an error:', error, errorInfo);
+  static getDerivedStateFromError(error: Error): Partial<State> {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('❌ [ErrorBoundary] Caught error:', error);
+    console.error('❌ [ErrorBoundary] Error info:', errorInfo);
     
     this.setState({
       error,
@@ -38,93 +38,69 @@ export class ErrorBoundary extends Component<Props, State> {
     });
   }
 
-  private handleReset = () => {
+  handleReset = () => {
     this.setState({
       hasError: false,
       error: null,
       errorInfo: null,
     });
     
-    // Reload the page to reset state
+    // Reload the page
     window.location.reload();
   };
 
-  public render() {
+  render() {
     if (this.state.hasError) {
       if (this.props.fallback) {
         return this.props.fallback;
       }
 
       return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-red-50 to-orange-50 dark:from-red-950 dark:to-orange-950 p-4">
-          <Card className="max-w-2xl w-full border-2 border-destructive/20">
-            <CardHeader>
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center">
-                  <AlertCircle className="w-6 h-6 text-destructive" />
+        <div className="min-h-screen flex items-center justify-center p-6 bg-background">
+          <div className="max-w-2xl w-full space-y-4">
+            <Alert variant="destructive">
+              <AlertCircle className="h-5 w-5" />
+              <AlertTitle className="text-lg">
+                حدث خطأ غير متوقع / An Unexpected Error Occurred
+              </AlertTitle>
+              <AlertDescription className="mt-4 space-y-4">
+                <div className="space-y-2">
+                  <p className="font-semibold">تفاصيل الخطأ:</p>
+                  <div className="bg-destructive/10 p-4 rounded-md font-mono text-sm overflow-auto">
+                    {this.state.error?.toString()}
+                  </div>
                 </div>
-                <div>
-                  <CardTitle className="text-2xl text-destructive">
-                    حدث خطأ غير متوقع
-                  </CardTitle>
-                  <CardDescription className="text-base">
-                    Something went wrong
-                  </CardDescription>
+
+                {this.state.errorInfo && (
+                  <details className="mt-4">
+                    <summary className="cursor-pointer text-sm font-semibold hover:underline">
+                      عرض التفاصيل التقنية
+                    </summary>
+                    <div className="mt-2 bg-destructive/10 p-4 rounded-md font-mono text-xs overflow-auto max-h-64">
+                      {this.state.errorInfo.componentStack}
+                    </div>
+                  </details>
+                )}
+
+                <div className="flex gap-2 mt-6">
+                  <Button onClick={this.handleReset} className="gap-2">
+                    <RefreshCw className="h-4 w-4" />
+                    إعادة تحميل الصفحة / Reload Page
+                  </Button>
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Error Message */}
-              <div className="p-4 rounded-lg bg-destructive/5 border border-destructive/20">
-                <p className="font-mono text-sm text-destructive">
-                  {this.state.error?.message || 'Unknown error'}
-                </p>
-              </div>
 
-              {/* Error Details (Development) */}
-              {(import.meta.env?.DEV || process.env.NODE_ENV === 'development') && this.state.errorInfo && (
-                <details className="p-4 rounded-lg bg-muted">
-                  <summary className="cursor-pointer font-medium mb-2">
-                    تفاصيل تقنية (للمطورين فقط)
-                  </summary>
-                  <pre className="text-xs overflow-auto max-h-64 p-2 bg-background rounded border">
-                    {this.state.errorInfo.componentStack}
-                  </pre>
-                </details>
-              )}
-
-              {/* Actions */}
-              <div className="flex flex-col sm:flex-row gap-3">
-                <Button
-                  onClick={this.handleReset}
-                  className="flex-1 gap-2"
-                  size="lg"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  <span>إعادة تحميل الصفحة</span>
-                </Button>
-                <Button
-                  onClick={() => window.location.href = '/'}
-                  variant="outline"
-                  className="flex-1"
-                  size="lg"
-                >
-                  العودة للرئيسية
-                </Button>
-              </div>
-
-              {/* Help Text */}
-              <div className="text-sm text-muted-foreground text-center pt-4 border-t">
-                <p>إذا استمرت المشكلة، يرجى:</p>
-                <ul className="list-disc list-inside mt-2 space-y-1">
-                  <li>مسح ذاكرة التخزين المؤقت للمتصفح</li>
-                  <li>التحقق من اتصال الإنترنت</li>
-                  <li>تحديث الصفحة (Ctrl + Shift + R)</li>
-                  <li>التواصل مع الدعم الفني</li>
-                </ul>
-              </div>
-            </CardContent>
-          </Card>
+                <div className="mt-4 p-4 bg-muted rounded-md text-sm space-y-2">
+                  <p className="font-semibold">💡 نصائح لحل المشكلة:</p>
+                  <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                    <li>تأكد من اتصالك بالإنترنت</li>
+                    <li>تحقق من إعدادات Supabase في /config/supabase.config.ts</li>
+                    <li>تأكد من أن جميع الجداول موجودة في قاعدة البيانات</li>
+                    <li>افتح Console (F12) لمزيد من التفاصيل</li>
+                  </ul>
+                </div>
+              </AlertDescription>
+            </Alert>
+          </div>
         </div>
       );
     }

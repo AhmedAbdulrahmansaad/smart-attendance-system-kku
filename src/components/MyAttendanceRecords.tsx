@@ -32,11 +32,12 @@ export function MyAttendanceRecords() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
-      const data = await apiRequest('/attendance/student', {
+      const data = await apiRequest('/attendance', {
+        method: 'GET',
         token: session.access_token,
       });
 
-      setAttendance(data.attendance);
+      setAttendance(data.attendance || []);
     } catch (error) {
       console.error('Error loading attendance:', error);
       setError('فشل تحميل سجل الحضور');

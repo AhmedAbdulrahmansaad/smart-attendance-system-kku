@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Backend Test - KKU Attendance System</title>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .test-box {
+      background: white;
+      padding: 20px;
+      margin: 20px 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .success { color: #006747; }
+    .error { color: #dc2626; }
+    button {
+      background: #006747;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+    }
+    button:hover {
+      background: #005030;
+    }
+    pre {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 6px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    .url {
+      background: #e3f2fd;
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-family: monospace;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔍 Backend Connection Test</h1>
+  <p>اختبار الاتصال بالـBackend</p>
+
+  <div class="test-box">
+    <h2>📋 Configuration</h2>
+    <div class="url">
+      <strong>Project ID:</strong> pcymgqdjbdklrikdquih
+    </div>
+    <div class="url">
+      <strong>Base URL:</strong><br>
+      https://pcymgqdjbdklrikdquih.supabase.co/functions/v1/server
+    </div>
+    <div class="url">
+      <strong>Health Check URL:</strong><br>
+      https://pcymgqdjbdklrikdquih.supabase.co/functions/v1/server/make-server-90ad488b/health
+    </div>
+  </div>
+
+  <div class="test-box">
+    <h2>🧪 Tests</h2>
+    <button onclick="testHealth()">1. Test Health Check</button>
+    <button onclick="testCORS()">2. Test CORS</button>
+    <button onclick="testAllEndpoints()">3. Test All Endpoints</button>
+  </div>
+
+  <div class="test-box" id="results">
+    <h2>📊 Results</h2>
+    <div id="output">Click a test button to start...</div>
+  </div>
+
+  <script>
+    const BASE_URL = 'https://pcymgqdjbdklrikdquih.supabase.co/functions/v1/server';
+    const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBjeW1ncWRqYmRrbHJpa2RxdWloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI4MTU3ODcsImV4cCI6MjA3ODM5MTc4N30.OTHtmMPSb2AAdSBHM19JY20gb4DzLzd8zILCN-zUvoQ';
+
+    function log(message, isError = false) {
+      const output = document.getElementById('output');
+      const className = isError ? 'error' : 'success';
+      output.innerHTML += `<div class="${className}">${message}</div>`;
+      console.log(message);
+    }
+
+    function clearOutput() {
+      document.getElementById('output').innerHTML = '';
+    }
+
+    async function testHealth() {
+      clearOutput();
+      log('🔍 Testing Health Check Endpoint...');
+      log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      
+      const url = `${BASE_URL}/make-server-90ad488b/health`;
+      log(`📡 URL: ${url}`);
+      
+      try {
+        log('⏳ Sending request...');
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${ANON_KEY}`
+          }
+        });
+        
+        log(`📊 Status: ${response.status} ${response.statusText}`);
+        log(`📋 Content-Type: ${response.headers.get('content-type')}`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          log('✅ SUCCESS! Backend is responding!');
+          log('Response:');
+          log(`<pre>${JSON.stringify(data, null, 2)}</pre>`);
+        } else {
+          const text = await response.text();
+          log(`❌ ERROR: ${response.status}`, true);
+          log(`Response: ${text}`, true);
+        }
+      } catch (error) {
+        log(`❌ FETCH ERROR: ${error.message}`, true);
+        log(`This usually means:`, true);
+        log(`1. CORS is blocking the request`, true);
+        log(`2. Edge Function is not deployed`, true);
+        log(`3. URL is incorrect`, true);
+        log(`<pre>${error.stack}</pre>`, true);
+      }
+    }
+
+    async function testCORS() {
+      clearOutput();
+      log('🔍 Testing CORS Configuration...');
+      log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      
+      const url = `${BASE_URL}/make-server-90ad488b/health`;
+      log(`📡 URL: ${url}`);
+      
+      try {
+        log('⏳ Sending OPTIONS request...');
+        const response = await fetch(url, {
+          method: 'OPTIONS',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${ANON_KEY}`
+          }
+        });
+        
+        log(`📊 Status: ${response.status}`);
+        log(`CORS Headers:`);
+        log(`  Access-Control-Allow-Origin: ${response.headers.get('access-control-allow-origin')}`);
+        log(`  Access-Control-Allow-Methods: ${response.headers.get('access-control-allow-methods')}`);
+        log(`  Access-Control-Allow-Headers: ${response.headers.get('access-control-allow-headers')}`);
+        
+        if (response.ok) {
+          log('✅ CORS is properly configured!');
+        } else {
+          log(`❌ CORS might have issues`, true);
+        }
+      } catch (error) {
+        log(`❌ CORS TEST FAILED: ${error.message}`, true);
+      }
+    }
+
+    async function testAllEndpoints() {
+      clearOutput();
+      log('🔍 Testing All Endpoints...');
+      log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      
+      const endpoints = [
+        '/make-server-90ad488b/health',
+        '/make-server-90ad488b/users',
+        '/make-server-90ad488b/courses',
+        '/make-server-90ad488b/sessions'
+      ];
+      
+      for (const endpoint of endpoints) {
+        const url = `${BASE_URL}${endpoint}`;
+        log(`\n📡 Testing: ${endpoint}`);
+        
+        try {
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${ANON_KEY}`
+            }
+          });
+          
+          if (response.ok) {
+            log(`  ✅ ${response.status} - Working`);
+          } else if (response.status === 401) {
+            log(`  ⚠️  ${response.status} - Needs authentication (expected)`);
+          } else {
+            log(`  ❌ ${response.status} - ${response.statusText}`, true);
+          }
+        } catch (error) {
+          log(`  ❌ FAILED: ${error.message}`, true);
+        }
+      }
+      
+      log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      log('✅ Test Complete!');
+    }
+  </script>
+</body>
+</html>

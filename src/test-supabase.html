@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🧪 Supabase Connection Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #718096;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f7fafc;
+            border-radius: 8px;
+            border-right: 4px solid #cbd5e0;
+        }
+        
+        .test-section.success {
+            background: #f0fff4;
+            border-right-color: #48bb78;
+        }
+        
+        .test-section.error {
+            background: #fff5f5;
+            border-right-color: #f56565;
+        }
+        
+        .test-section.warning {
+            background: #fffaf0;
+            border-right-color: #ed8936;
+        }
+        
+        .test-title {
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status {
+            font-size: 20px;
+        }
+        
+        .test-result {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #4a5568;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin: 10px 5px;
+        }
+        
+        button:hover {
+            background: #5a67d8;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #cbd5e0;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .code-block {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        
+        .highlight {
+            color: #fbd38d;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 اختبار اتصال Supabase</h1>
+        <p class="subtitle">تشخيص شامل لقاعدة البيانات والاتصال</p>
+        
+        <div style="margin: 20px 0;">
+            <button onclick="runAllTests()">▶️ تشغيل جميع الاختبارات</button>
+            <button onclick="testConnection()">🔗 اختبار الاتصال</button>
+            <button onclick="testCourses()">📚 اختبار جدول Courses</button>
+            <button onclick="clearResults()">🗑️ مسح النتائج</button>
+        </div>
+        
+        <div id="results"></div>
+    </div>
+
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/+esm';
+        
+        // ⚠️ استبدل هذه القيم بالمفاتيح الحقيقية من Supabase Dashboard
+        const SUPABASE_URL = 'https://pcymgqdjbdklrikdquih.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBjeW1ncWRqYmRrbHJpa2RxdWloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzM1MzEyNzYsImV4cCI6MjA0OTEwNzI3Nn0.EZrP-jy2Kn8pQ9A9ZbD-3_I4pOeQO-MtqWWg2t9JJxI';
+        
+        const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        
+        window.runAllTests = async function() {
+            clearResults();
+            await testConfig();
+            await testConnection();
+            await testCourses();
+            await testProfiles();
+        }
+        
+        window.testConfig = async function() {
+            const result = document.createElement('div');
+            result.className = 'test-section';
+            result.innerHTML = `
+                <div class="test-title">
+                    <span class="status">⚙️</span>
+                    <span>فحص التكوين (Configuration)</span>
+                </div>
+                <div class="test-result">جارٍ الفحص...</div>
+            `;
+            document.getElementById('results').appendChild(result);
+            
+            try {
+                const isValid = SUPABASE_URL && 
+                               SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+                               SUPABASE_ANON_KEY && 
+                               SUPABASE_ANON_KEY !== 'your-anon-public-key-here' &&
+                               SUPABASE_ANON_KEY.length > 50;
+                
+                if (isValid) {
+                    result.className = 'test-section success';
+                    result.querySelector('.status').textContent = '✅';
+                    result.querySelector('.test-result').innerHTML = `
+<span class="highlight">Supabase URL:</span> ${SUPABASE_URL}
+<span class="highlight">Anon Key:</span> ${SUPABASE_ANON_KEY.substring(0, 30)}...
+<span class="highlight">Status:</span> التكوين صحيح ✅
+                    `;
+                } else {
+                    result.className = 'test-section error';
+                    result.querySelector('.status').textContent = '❌';
+                    result.querySelector('.test-result').innerHTML = `
+<span class="highlight">خطأ:</span> المفاتيح غير صحيحة!
+
+<div class="code-block">
+📝 كيف تحصل على المفاتيح:
+1. اذهب إلى: https://supabase.com/dashboard
+2. اختر مشروعك
+3. Settings → API
+4. انسخ:
+   - Project URL → SUPABASE_URL
+   - anon public → SUPABASE_ANON_KEY
+5. استبدلهم في هذا الملف
+</div>
+                    `;
+                }
+            } catch (error) {
+                result.className = 'test-section error';
+                result.querySelector('.status').textContent = '❌';
+                result.querySelector('.test-result').textContent = `خطأ: ${error.message}`;
+            }
+        }
+        
+        window.testConnection = async function() {
+            const result = document.createElement('div');
+            result.className = 'test-section';
+            result.innerHTML = `
+                <div class="test-title">
+                    <span class="status">🔗</span>
+                    <span>اختبار الاتصال بقاعدة البيانات</span>
+                </div>
+                <div class="test-result">جارٍ الاتصال...</div>
+            `;
+            document.getElementById('results').appendChild(result);
+            
+            try {
+                const { data, error } = await supabase
+                    .from('kv_store_90ad488b')
+                    .select('key', { count: 'exact', head: true })
+                    .limit(1);
+                
+                if (error) throw error;
+                
+                result.className = 'test-section success';
+                result.querySelector('.status').textContent = '✅';
+                result.querySelector('.test-result').innerHTML = `
+<span class="highlight">الاتصال ناجح!</span>
+<span class="highlight">Database:</span> متصل بنجاح ✅
+<span class="highlight">Response Time:</span> < 1 ثانية
+                `;
+            } catch (error) {
+                result.className = 'test-section error';
+                result.querySelector('.status').textContent = '❌';
+                result.querySelector('.test-result').innerHTML = `
+<span class="highlight">فشل الاتصال!</span>
+<span class="highlight">Error:</span> ${error.message}
+
+<div class="code-block">
+🔧 الحلول المحتملة:
+1. تأكد من صحة SUPABASE_URL و SUPABASE_ANON_KEY
+2. تأكد من إنشاء جدول kv_store_90ad488b
+3. تحقق من Row Level Security (RLS)
+</div>
+                `;
+            }
+        }
+        
+        window.testCourses = async function() {
+            const result = document.createElement('div');
+            result.className = 'test-section';
+            result.innerHTML = `
+                <div class="test-title">
+                    <span class="status">📚</span>
+                    <span>اختبار جدول Courses</span>
+                </div>
+                <div class="test-result">جارٍ الفحص...</div>
+            `;
+            document.getElementById('results').appendChild(result);
+            
+            try {
+                // Test SELECT
+                const { data, error, count } = await supabase
+                    .from('courses')
+                    .select('*', { count: 'exact' });
+                
+                if (error) throw error;
+                
+                result.className = 'test-section success';
+                result.querySelector('.status').textContent = '✅';
+                result.querySelector('.test-result').innerHTML = `
+<span class="highlight">جدول Courses موجود ويعمل!</span>
+<span class="highlight">عدد المواد:</span> ${count || 0}
+<span class="highlight">Columns Found:</span> ${data && data[0] ? Object.keys(data[0]).join(', ') : 'N/A'}
+
+${data && data.length > 0 ? `
+<div class="code-block">
+📊 أول مادة:
+${JSON.stringify(data[0], null, 2)}
+</div>
+` : '<span class="highlight">ملاحظة:</span> الجدول فارغ (لا يوجد مواد بعد)'}
+                `;
+            } catch (error) {
+                result.className = 'test-section error';
+                result.querySelector('.status').textContent = '❌';
+                result.querySelector('.test-result').innerHTML = `
+<span class="highlight">فشل الوصول لجدول Courses!</span>
+<span class="highlight">Error:</span> ${error.message}
+
+<div class="code-block">
+🔧 الحلول:
+1. تأكد من إنشاء جدول courses في Supabase
+2. تأكد من إعدادات RLS (Row Level Security)
+3. نفذ SQL من ملف: /DATABASE_SETUP.sql
+</div>
+                `;
+            }
+        }
+        
+        window.testProfiles = async function() {
+            const result = document.createElement('div');
+            result.className = 'test-section';
+            result.innerHTML = `
+                <div class="test-title">
+                    <span class="status">👥</span>
+                    <span>اختبار جدول Profiles</span>
+                </div>
+                <div class="test-result">جارٍ الفحص...</div>
+            `;
+            document.getElementById('results').appendChild(result);
+            
+            try {
+                const { data, error, count } = await supabase
+                    .from('profiles')
+                    .select('*', { count: 'exact' });
+                
+                if (error) throw error;
+                
+                result.className = 'test-section success';
+                result.querySelector('.status').textContent = '✅';
+                result.querySelector('.test-result').innerHTML = `
+<span class="highlight">جدول Profiles موجود!</span>
+<span class="highlight">عدد المستخدمين:</span> ${count || 0}
+<span class="highlight">Columns:</span> ${data && data[0] ? Object.keys(data[0]).join(', ') : 'N/A'}
+                `;
+            } catch (error) {
+                result.className = 'test-section error';
+                result.querySelector('.status').textContent = '❌';
+                result.querySelector('.test-result').textContent = `خطأ: ${error.message}`;
+            }
+        }
+        
+        window.clearResults = function() {
+            document.getElementById('results').innerHTML = '';
+        }
+        
+        // Auto-run on load
+        setTimeout(() => {
+            runAllTests();
+        }, 500);
+    </script>
+</body>
+</html>

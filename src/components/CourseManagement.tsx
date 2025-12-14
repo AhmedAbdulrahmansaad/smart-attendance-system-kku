@@ -17,6 +17,7 @@ import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthContext';
 import { useLanguage } from './LanguageContext';
 import { toast } from 'sonner';
+import { getCourses, createCourse, deleteCourse, getUsers } from '../utils/apiWithFallback';
 
 interface Course {
   id: string;
@@ -70,18 +71,11 @@ export function CourseManagement() {
     if (!token) return;
     
     try {
-      console.log('📚 [CourseManagement] Loading courses from Supabase...');
+      console.log('📚 [CourseManagement] Loading courses...');
       
-      const { data, error } = await supabase
-        .from('courses')
-        .select('*')
-        .order('course_name', { ascending: true });
-
-      if (error) {
-        console.error('❌ [CourseManagement] Error:', error);
-        throw error;
-      }
-
+      // Use fallback API (tries Backend first, falls back to Supabase)
+      const data = await getCourses(token);
+      
       console.log('✅ [CourseManagement] Loaded', data?.length, 'courses');
       setCourses(data || []);
     } catch (error: any) {
@@ -153,32 +147,27 @@ export function CourseManagement() {
     }
 
     try {
-      console.log('➕ [CourseManagement] Adding new course to Supabase...');
+      console.log('➕ [CourseManagement] Adding new course...');
       
       // For instructors, automatically assign themselves
       const instructorId = currentUser?.role === 'instructor' 
         ? currentUser.id 
-        : (newCourseInstructor || null);
+        : (newCourseInstructor || currentUser!.id);
 
-      const { data, error } = await supabase
-        .from('courses')
-        .insert({
+      // Use fallback API (tries Backend first, falls back to Supabase)
+      await createCourse(
+        {
           course_name: newCourseName,
           course_code: newCourseCode,
           instructor_id: instructorId,
-          semester: newSemester,
-          year: newYear,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('❌ [CourseManagement] Error:', error);
-        throw error;
-      }
+          semester: newSemester || 'Fall', // Required field - default to Fall
+          year: newYear || new Date().getFullYear().toString(), // Required field - default to current year
+        },
+        token
+      );
 
       console.log('✅ [CourseManagement] Course added successfully');
-      toast.success('تم إضافة المادة بنجاح / Course added successfully');
+      toast.success('تم إضافة المادة بنج��ح / Course added successfully');
 
       // Reset form
       setNewCourseName('');
@@ -192,7 +181,9 @@ export function CourseManagement() {
       await loadCourses();
     } catch (error: any) {
       console.error('❌ [CourseManagement] Error adding course:', error);
-      toast.error('فشل إضافة المادة / Failed to add course');
+      toast.error('فشل إضافة المادة / Failed to add course', {
+        description: error.message
+      });
       setError(error.message || 'فشل إضافة المادة');
     }
   };
@@ -205,17 +196,10 @@ export function CourseManagement() {
     }
 
     try {
-      console.log('🗑️ [CourseManagement] Deleting course from Supabase...');
+      console.log('🗑️ [CourseManagement] Deleting course...');
       
-      const { error } = await supabase
-        .from('courses')
-        .delete()
-        .eq('id', courseId);
-
-      if (error) {
-        console.error('❌ [CourseManagement] Error:', error);
-        throw error;
-      }
+      // Use fallback API (tries Backend first, falls back to Supabase)
+      await deleteCourse(courseId, token);
 
       console.log('✅ [CourseManagement] Course deleted successfully');
       toast.success('تم حذف المادة بنجاح / Course deleted successfully');
@@ -391,7 +375,7 @@ export function CourseManagement() {
 
                 <div className="space-y-2">
                   <Label htmlFor="semester">
-                    {language === 'ar' ? 'الفصل الدراسي' : 'Semester'}
+                    {language === 'ar' ? 'الفصل الدرسي' : 'Semester'}
                   </Label>
                   <select
                     id="semester"

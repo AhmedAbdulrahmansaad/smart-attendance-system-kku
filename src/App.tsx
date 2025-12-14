@@ -33,6 +33,7 @@ const DatabaseConnectionTest = lazy(() => import('./components/DatabaseConnectio
 const SystemHealthCheck = lazy(() => import('./components/SystemHealthCheck').then(m => ({ default: m.SystemHealthCheck })));
 const APITester = lazy(() => import('./components/APITester').then(m => ({ default: m.APITester })));
 const ConnectionTest = lazy(() => import('./components/ConnectionTest').then(m => ({ default: m.ConnectionTest })));
+const TestAPI = lazy(() => import('./test-api').then(m => ({ default: m.default })));
 
 type Page = 'landing' | 'login' | 'team' | 'dashboard' | string;
 
@@ -424,6 +425,16 @@ function AppContent() {
           </ErrorBoundary>
         </div>
       </div>
+    );
+  }
+
+  if (currentPage === 'test-api') {
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={<LoadingFallback />}>
+          <TestAPI />
+        </Suspense>
+      </ErrorBoundary>
     );
   }
 

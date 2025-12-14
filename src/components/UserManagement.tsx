@@ -6,8 +6,9 @@ import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
-import { apiRequest } from '../utils/api';
+import { getUsers, createUser } from '../utils/apiWithFallback';
 import { Users, Trash2, UserPlus, Search, AlertCircle } from 'lucide-react';
+import { toast } from 'sonner';
 
 export function UserManagement() {
   const { language } = useLanguage();
@@ -33,14 +34,18 @@ export function UserManagement() {
     if (!token) return;
     
     try {
-      const data = await apiRequest('/users', {
-        token,
-      });
-
-      setUsers(data.users || []);
-    } catch (error) {
-      console.error('Error loading users:', error);
-      setError('فشل تحميل المستخدمين');
+      console.log('👥 [UserManagement] Loading users...');
+      
+      // Use fallback API (tries Backend first, falls back to Supabase)
+      const data = await getUsers(token);
+      
+      console.log('✅ [UserManagement] Loaded', data?.length, 'users');
+      setUsers(data || []);
+      setError('');
+    } catch (error: any) {
+      console.error('❌ [UserManagement] Error loading users:', error);
+      toast.error('فشل تحميل المستخدمين / Failed to load users');
+      setError(error.message || 'فشل تحميل المستخدمين');
     } finally {
       setLoading(false);
     }
@@ -56,17 +61,18 @@ export function UserManagement() {
     }
 
     try {
-      await apiRequest('/signup', {
-        method: 'POST',
-        body: {
-          email: newUserEmail,
-          password: newUserPassword,
-          full_name: newUserName,
-          role: newUserRole,
-          university_id: newUserRole === 'student' ? newUserUniversityId : undefined,
-        },
-        token,
-      });
+      console.log('➕ [UserManagement] Adding new user...');
+      
+      await createUser({
+        email: newUserEmail,
+        password: newUserPassword,
+        full_name: newUserName,
+        role: newUserRole,
+        university_id: newUserRole === 'student' ? newUserUniversityId : undefined,
+      }, token);
+
+      console.log('✅ [UserManagement] User added successfully');
+      toast.success('تم إضافة المستخدم بنجاح / User added successfully');
 
       // Reset form
       setNewUserEmail('');
@@ -79,6 +85,19 @@ export function UserManagement() {
       // Reload users
       await loadUsers();
     } catch (error: any) {
+      console.error('❌ [UserManagement] Error adding user:', error);
+      
+      // Special handling for Backend required error
+      if (error.message.includes('Backend is required')) {
+        toast.error('يجب deploy Edge Function لإنشاء مستخدمين / Backend required to create users', {
+          description: error.message
+        });
+      } else {
+        toast.error('فشل إضافة المستخدم / Failed to add user', {
+          description: error.message
+        });
+      }
+      
       setError(error.message || 'فشل إضافة المستخدم');
     }
   };

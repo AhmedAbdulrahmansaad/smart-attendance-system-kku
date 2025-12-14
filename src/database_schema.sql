@@ -34,12 +34,21 @@ CREATE TABLE IF NOT EXISTS courses (
   course_name TEXT NOT NULL,
   course_code TEXT NOT NULL UNIQUE,
   instructor_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  semester TEXT,
+  year TEXT,
+  department TEXT,
+  credits INTEGER,
+  description TEXT,
+  is_active BOOLEAN DEFAULT true,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Index لتسريع البحث حسب المدرس
 CREATE INDEX IF NOT EXISTS idx_courses_instructor ON courses(instructor_id);
+
+-- Index لتسريع البحث حسب الكود
+CREATE INDEX IF NOT EXISTS idx_courses_code ON courses(course_code);
 
 -- =====================================================
 -- 3. جدول التسجيل في المقررات (Enrollments)

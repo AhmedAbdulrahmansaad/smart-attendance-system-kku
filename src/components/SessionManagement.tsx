@@ -30,6 +30,13 @@ import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
 import { LiveStreamHost } from './LiveStreamHost';
 import { toast } from 'sonner';
+import { apiRequest } from '../utils/api';
+import { 
+  getCourses, 
+  getSessions, 
+  createSession,
+  updateSession 
+} from '../utils/apiWithFallback';
 
 interface Session {
   id: string;
@@ -168,45 +175,26 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     setError('');
 
     try {
-      if (!token) return;
-
-      console.log('➕ [SessionManagement] Creating new session...');
-
-      // Generate a unique 6-character code
-      const generateCode = () => {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Exclude confusing characters
-        let code = '';
-        for (let i = 0; i < 6; i++) {
-          code += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return code;
-      };
-
-      const code = generateCode();
-      const durationMinutes = parseInt(newSessionDuration);
-      const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000).toISOString();
-
-      const { data, error } = await supabase
-        .from('sessions')
-        .insert({
-          course_id: newSessionCourse,
-          code: code,
-          created_by: user?.id,
-          expires_at: expiresAt,
-          active: true,
-          session_type: newSessionType,
-          title: newSessionTitle || null,
-          description: newSessionDescription || null,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('❌ [SessionManagement] Error:', error);
-        throw error;
+      if (!token) {
+        setError('غير مصرح');
+        return;
       }
 
-      console.log('✅ [SessionManagement] Session created successfully');
+      console.log('➕ [SessionManagement] Creating session...');
+
+      const durationMinutes = parseInt(newSessionDuration);
+
+      // استخدام createSession مع fallback تلقائي
+      const newSession = await createSession({
+        course_id: newSessionCourse,
+        session_date: new Date().toISOString().split('T')[0],
+        session_time: new Date().toTimeString().split(' ')[0],
+        duration: durationMinutes,
+        session_type: newSessionType,
+        session_code: undefined, // سيتم توليده تلقائياً
+      }, token);
+
+      console.log('✅ [SessionManagement] Session created successfully:', newSession);
       toast.success('تم إنشاء الجلسة بنجاح / Session created successfully');
 
       setIsDialogOpen(false);
@@ -219,7 +207,9 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
       await loadAllSessions();
     } catch (err: any) {
       console.error('❌ [SessionManagement] Error creating session:', err);
-      toast.error('فشل إنشاء الجلسة / Failed to create session');
+      toast.error('فشل إنشاء الجلسة / Failed to create session', {
+        description: err.message
+      });
       setError(err.message || 'فشل إنشاء الجلسة');
     }
   };
