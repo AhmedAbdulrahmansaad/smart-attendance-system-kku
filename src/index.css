@@ -3610,6 +3610,12 @@
   }
 
   @media (hover: hover) {
+    .hover\:bg-transparent:hover {
+      background-color: #0000;
+    }
+  }
+
+  @media (hover: hover) {
     .hover\:bg-white\/90:hover {
       background-color: #ffffffe6;
     }
@@ -4194,6 +4200,14 @@
     .lg\:grid-cols-4 {
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }
+  }
+
+  .rtl\:right-0:where(:dir(rtl), [dir="rtl"], [dir="rtl"] *) {
+    right: calc(var(--spacing) * 0);
+  }
+
+  .rtl\:left-auto:where(:dir(rtl), [dir="rtl"], [dir="rtl"] *) {
+    left: auto;
   }
 
   .dark\:border-blue-800:is(.dark *) {

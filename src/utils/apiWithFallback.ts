@@ -370,6 +370,7 @@ export async function getSessions(
 export async function createSession(
   sessionData: {
     course_id: string;
+    instructor_id?: string;
     session_date: string;
     session_time: string;
     duration: number;
@@ -405,21 +406,16 @@ export async function createSession(
   // Generate session code (6 characters)
   const code = Math.random().toString(36).substring(2, 8).toUpperCase();
   
-  // Calculate expires_at based on duration
-  const expiresAt = new Date();
-  expiresAt.setMinutes(expiresAt.getMinutes() + sessionData.duration);
-  
   const { data, error } = await supabase
     .from('sessions')
     .insert({
       course_id: sessionData.course_id,
+      instructor_id: sessionData.instructor_id, // إضافة معرف المدرس
       code: sessionData.session_code || code,
       session_date: sessionData.session_date,
       start_time: sessionData.session_time,
       session_type: sessionData.session_type,
       location: sessionData.location,
-      active: true,
-      expires_at: expiresAt.toISOString(),
     })
     .select()
     .single();

@@ -92,6 +92,12 @@ export function LiveStreamHost({ sessionId, sessionTitle, meetingUrl, attendance
   const initializeJitsi = () => {
     if (!jitsiContainerRef.current || !window.JitsiMeetExternalAPI) {
       console.error('❌ [Host] Jitsi container or API not ready');
+      setError(
+        language === 'ar'
+          ? 'فشل تحميل مكتبة البث المباشر'
+          : 'Failed to load live streaming library'
+      );
+      setIsLoading(false);
       return;
     }
 
@@ -112,8 +118,22 @@ export function LiveStreamHost({ sessionId, sessionTitle, meetingUrl, attendance
           startWithVideoMuted: false,
           enableWelcomePage: false,
           prejoinPageEnabled: false,
+          startAudioOnly: false,
           disableDeepLinking: true,
           enableNoisyMicDetection: true,
+          // Ensure camera and mic are enabled by default
+          constraints: {
+            video: {
+              height: {
+                ideal: 720,
+                max: 1080,
+                min: 240
+              }
+            }
+          },
+          // Disable prejoin completely
+          hideConferenceSubject: false,
+          disableInviteFunctions: false,
         },
         interfaceConfigOverwrite: {
           TOOLBAR_BUTTONS: [
@@ -148,6 +168,7 @@ export function LiveStreamHost({ sessionId, sessionTitle, meetingUrl, attendance
           DEFAULT_BACKGROUND: '#006747',
           DEFAULT_REMOTE_DISPLAY_NAME: language === 'ar' ? 'طالب' : 'Student',
           DEFAULT_LOCAL_DISPLAY_NAME: language === 'ar' ? 'المدرس' : 'Instructor',
+          FILM_STRIP_MAX_HEIGHT: 120,
         },
         userInfo: {
           displayName: user?.full_name || (language === 'ar' ? 'المدرس' : 'Instructor'),
@@ -155,7 +176,8 @@ export function LiveStreamHost({ sessionId, sessionTitle, meetingUrl, attendance
         },
       };
 
-      console.log('🚀 [Host] Initializing Jitsi with options:', options);
+      console.log('🚀 [Host] Initializing Jitsi with room:', roomName);
+      console.log('🎥 [Host] Video config: startWithVideoMuted = false, startAudioOnly = false');
       
       const api = new window.JitsiMeetExternalAPI(domain, options);
       jitsiApiRef.current = api;
@@ -174,6 +196,37 @@ export function LiveStreamHost({ sessionId, sessionTitle, meetingUrl, attendance
         console.log('✅ [Host] Successfully joined conference:', data);
         setIsLoading(false);
         setError('');
+        
+        // 🔥 FORCE UNMUTE AUDIO AND VIDEO FOR HOST
+        setTimeout(() => {
+          console.log('🎥 [Host] Force enabling camera and microphone...');
+          try {
+            // Unmute audio (turn on microphone)
+            api.executeCommand('toggleAudio'); // If muted, this will unmute
+            api.isAudioMuted().then((muted: boolean) => {
+              if (muted) {
+                console.log('🔊 [Host] Audio was muted, unmuting now...');
+                api.executeCommand('toggleAudio');
+              } else {
+                console.log('✅ [Host] Audio already unmuted');
+              }
+            });
+            
+            // Unmute video (turn on camera)
+            api.isVideoMuted().then((muted: boolean) => {
+              if (muted) {
+                console.log('📹 [Host] Video was muted, unmuting now...');
+                api.executeCommand('toggleVideo');
+              } else {
+                console.log('✅ [Host] Video already unmuted');
+              }
+            });
+            
+            console.log('✅ [Host] Camera and microphone should be active now!');
+          } catch (err) {
+            console.error('❌ [Host] Error enabling devices:', err);
+          }
+        }, 1000); // Wait 1 second after joining
       });
 
       api.on('participantJoined', async (participant: any) => {

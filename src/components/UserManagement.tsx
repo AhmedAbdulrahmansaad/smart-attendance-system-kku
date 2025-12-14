@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { PasswordInput } from './ui/password-input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { useLanguage } from './LanguageContext';
@@ -226,9 +227,8 @@ export function UserManagement() {
 
                 <div className="space-y-2">
                   <Label htmlFor="password">{language === 'ar' ? 'كلمة المرور' : 'Password'}</Label>
-                  <Input
+                  <PasswordInput
                     id="password"
-                    type="password"
                     value={newUserPassword}
                     onChange={(e) => setNewUserPassword(e.target.value)}
                     placeholder="******"

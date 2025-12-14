@@ -6,6 +6,7 @@ import { useTheme } from './ThemeContext';
 import { useTranslation } from '../utils/i18n';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { PasswordInput } from './ui/password-input';
 import { Label } from './ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
@@ -387,7 +388,7 @@ export function LoginPage({ onBack }: LoginPageProps) {
 
                         <div className="space-y-2">
                           <Label htmlFor="signin-password" className="text-base font-semibold">{t('password')}</Label>
-                          <Input
+                          <PasswordInput
                             id="signin-password"
                             type="password"
                             placeholder="••••••••"
@@ -462,7 +463,7 @@ export function LoginPage({ onBack }: LoginPageProps) {
 
                         <div className="space-y-2">
                           <Label htmlFor="signup-password" className="text-base font-semibold">{t('password')}</Label>
-                          <Input
+                          <PasswordInput
                             id="signup-password"
                             type="password"
                             placeholder="••••••••"

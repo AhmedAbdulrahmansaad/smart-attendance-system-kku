@@ -106,7 +106,19 @@ export function LiveStreamViewer({
           startWithVideoMuted: true,
           enableWelcomePage: false,
           prejoinPageEnabled: false,
+          startAudioOnly: false,
           disableDeepLinking: true,
+          // Ensure camera and mic access
+          constraints: {
+            video: {
+              height: {
+                ideal: 720,
+                max: 1080,
+                min: 240
+              }
+            }
+          },
+          hideConferenceSubject: false,
         },
         interfaceConfigOverwrite: {
           TOOLBAR_BUTTONS: [
@@ -140,7 +152,8 @@ export function LiveStreamViewer({
         },
       };
 
-      console.log('🚀 [Viewer] Initializing Jitsi with options:', options);
+      console.log('🚀 [Viewer] Initializing Jitsi with room:', roomName);
+      console.log('🎥 [Viewer] Video config: Muted by default, but camera ready');
       
       const api = new window.JitsiMeetExternalAPI(domain, options);
       jitsiApiRef.current = api;
@@ -150,6 +163,38 @@ export function LiveStreamViewer({
         console.log('✅ [Viewer] Successfully joined conference');
         setIsLoading(false);
         setError('');
+        
+        // 🔥 ENSURE AUDIO/VIDEO STATE IS CORRECT FOR STUDENTS
+        setTimeout(() => {
+          console.log('🎥 [Viewer] Checking audio/video state...');
+          try {
+            // Check and ensure audio is muted for students (they can unmute manually)
+            api.isAudioMuted().then((muted: boolean) => {
+              if (!muted) {
+                console.log('🔇 [Viewer] Muting audio for student (default)...');
+                api.executeCommand('toggleAudio');
+              } else {
+                console.log('✅ [Viewer] Audio already muted (as expected)');
+              }
+              setIsMuted(true); // Update state
+            });
+            
+            // Check and ensure video is muted for students (they can unmute manually)
+            api.isVideoMuted().then((muted: boolean) => {
+              if (!muted) {
+                console.log('📹 [Viewer] Muting video for student (default)...');
+                api.executeCommand('toggleVideo');
+              } else {
+                console.log('✅ [Viewer] Video already muted (as expected)');
+              }
+              setIsVideoOff(true); // Update state
+            });
+            
+            console.log('✅ [Viewer] Audio/video state configured!');
+          } catch (err) {
+            console.error('❌ [Viewer] Error configuring devices:', err);
+          }
+        }, 1000); // Wait 1 second after joining
       });
 
       api.on('participantJoined', (participant: any) => {

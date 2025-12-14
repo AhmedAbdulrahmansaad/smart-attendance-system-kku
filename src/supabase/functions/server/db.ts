@@ -321,10 +321,16 @@ export async function createSession(sessionData: {
   const { data, error } = await supabase
     .from('sessions')
     .insert([{
-      ...sessionData,
+      course_id: sessionData.course_id,
+      instructor_id: sessionData.instructor_id,
+      code: sessionData.code,
+      session_date: startTime.toISOString().split('T')[0],
       start_time: startTime.toISOString(),
       end_time: endTime.toISOString(),
+      session_type: sessionData.session_type,
+      location: sessionData.location || null,
       is_active: true,
+      stream_active: sessionData.session_type === 'live',
     }])
     .select()
     .single();
@@ -420,7 +426,7 @@ export async function updateSession(sessionId: string, updates: any) {
 }
 
 export async function deactivateSession(sessionId: string) {
-  return updateSession(sessionId, { is_active: false });
+  return updateSession(sessionId, { is_active: false, stream_active: false });
 }
 
 export async function deleteSession(sessionId: string) {

@@ -1,11 +1,9 @@
 import { projectId, publicAnonKey } from './supabase/info';
 
-// Edge Function routes are prefixed with /make-server-90ad488b
-// Correct URL: https://PROJECT_ID.supabase.co/functions/v1/make-server-90ad488b/route
-// The Edge Function is deployed as 'server', so the function endpoint is:
-// https://PROJECT_ID.supabase.co/functions/v1/server
-// But routes inside are /make-server-90ad488b/..., so we use the full path
-const BASE_URL = `https://${projectId}.supabase.co/functions/v1`;
+// Edge Function is deployed as 'server'
+// Routes inside are prefixed with /make-server-90ad488b
+// Correct URL format: https://PROJECT_ID.supabase.co/functions/v1/server/make-server-90ad488b/route
+const BASE_URL = `https://${projectId}.supabase.co/functions/v1/server`;
 
 export async function apiRequest(
   endpoint: string,

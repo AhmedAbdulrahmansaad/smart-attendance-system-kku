@@ -2,23 +2,14 @@ import { Hono } from "npm:hono@4";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
 import { createClient } from "npm:@supabase/supabase-js@2";
-
-// =====================================================
-// 🚀 نظام الحضور الذكي - جامعة الملك خالد
-// King Khalid University Smart Attendance System
-// Edge Function - Complete & Production Ready
-// =====================================================
+import * as db from "./db.ts";
 
 const app = new Hono();
-
-// =====================================================
-// Middleware Configuration
-// =====================================================
 
 // Enable logger
 app.use('*', logger(console.log));
 
-// Enable CORS for all routes
+// Enable CORS for all routes and methods
 app.use(
   "/*",
   cors({
@@ -30,1190 +21,1328 @@ app.use(
   }),
 );
 
-// =====================================================
-// Supabase Client Helper
-// =====================================================
-
-function getSupabaseClient(useServiceRole = false) {
-  const url = Deno.env.get('SUPABASE_URL')!;
-  const key = useServiceRole 
-    ? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    : Deno.env.get('SUPABASE_ANON_KEY')!;
-  
-  return createClient(url, key);
-}
-
-// =====================================================
-// Helper Functions
-// =====================================================
-
-// Get authenticated user from token
+// Helper to get authenticated user
 async function getAuthenticatedUser(request: Request) {
   const accessToken = request.headers.get('Authorization')?.split(' ')[1];
   if (!accessToken) {
     return { error: 'Missing authorization token', user: null };
   }
   
-  const supabase = getSupabaseClient();
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_ANON_KEY')!,
+  );
   
   const { data, error } = await supabase.auth.getUser(accessToken);
   if (error || !data.user) {
     return { error: 'Unauthorized', user: null };
   }
   
-  // Get user profile from profiles table
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', data.user.id)
-    .single();
+  // Get user from database
+  let userRecord = await db.getUserByAuthId(data.user.id);
   
-  if (profileError || !profile) {
-    console.log('❌ Profile not found for user:', data.user.id);
-    return { error: 'Profile not found', user: null };
-  }
-  
-  return { error: null, user: profile };
-}
-
-// Generate random session code
-function generateCode(length = 6): string {
-  return Math.random().toString(36).substring(2, 2 + length).toUpperCase();
-}
-
-// =====================================================
-// 1. HEALTH CHECK
-// =====================================================
-
-app.get("/make-server-90ad488b/health", async (c) => {
-  try {
-    const supabase = getSupabaseClient();
+  // If user doesn't exist in database, create it from user_metadata
+  if (!userRecord) {
+    console.log('🔧 [getAuthenticatedUser] User not found in DB, creating from metadata:', data.user.id);
     
-    // Test database connection
-    const { error } = await supabase
-      .from('profiles')
-      .select('count')
-      .limit(1);
-    
-    if (error) {
-      console.log('❌ Database connection failed:', error);
-      return c.json({
-        status: 'unhealthy',
-        timestamp: new Date().toISOString(),
-        database: false,
-        message: 'Database connection failed',
-        error: error.message
-      }, 500);
+    const metadata = data.user.user_metadata || {};
+    try {
+      userRecord = await db.createUser({
+        auth_id: data.user.id,
+        email: data.user.email || '',
+        full_name: metadata.full_name || metadata.name || 'User',
+        role: metadata.role || 'student',
+        university_id: metadata.university_id || undefined,
+      });
+      console.log('✅ [getAuthenticatedUser] User created in DB:', userRecord.email);
+    } catch (err) {
+      console.error('❌ Error creating user:', err);
+      return { error: 'Error creating user', user: null };
     }
-    
-    return c.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      database: true,
-      message: 'Backend is running correctly',
-      messageAr: 'الخادم يعمل بشكل صحيح'
-    });
-  } catch (error: any) {
-    console.log('❌ Health check error:', error);
-    return c.json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      database: false,
-      message: 'Backend has issues',
-      error: error.message
-    }, 500);
   }
-});
+  
+  return { error: null, user: userRecord };
+}
 
-// =====================================================
-// 2. AUTHENTICATION
-// =====================================================
+// Helper to generate random code
+function generateSessionCode(): string {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
 
-// Sign Up
+// ==================== AUTH ENDPOINTS ====================
+
+// Sign up endpoint
 app.post("/make-server-90ad488b/signup", async (c) => {
   try {
-    const body = await c.req.json();
-    const { email, password, full_name, role, university_id } = body;
+    const { email, password, full_name, role, university_id } = await c.req.json();
     
-    // Validate required fields
     if (!email || !password || !full_name || !role) {
-      return c.json({ 
-        error: 'Missing required fields',
-        messageAr: 'جميع الحقول مطلوبة'
-      }, 400);
+      return c.json({ error: 'Missing required fields' }, 400);
     }
     
-    // Validate KKU email
+    // Validate email domain
     if (!email.endsWith('@kku.edu.sa')) {
-      return c.json({ 
-        error: 'Email must be @kku.edu.sa',
-        messageAr: 'يجب أن يكون البريد من جامعة الملك خالد'
-      }, 400);
+      return c.json({ error: 'Must use university email @kku.edu.sa' }, 400);
     }
     
-    // Validate role
-    const validRoles = ['admin', 'instructor', 'student', 'supervisor'];
-    if (!validRoles.includes(role)) {
-      return c.json({ 
-        error: 'Invalid role',
-        messageAr: 'الدور غير صحيح'
-      }, 400);
+    if (!['student', 'instructor', 'admin', 'supervisor'].includes(role)) {
+      return c.json({ error: 'Invalid role' }, 400);
     }
-    
-    // Validate student university ID
+
+    // Validate university_id for students
     if (role === 'student') {
-      if (!university_id || !/^44\d{7}$/.test(university_id)) {
+      if (!university_id) {
+        return c.json({ error: 'University ID is required for students' }, 400);
+      }
+      
+      // Validate university ID format: 9 digits starting with 44
+      const universityIdRegex = /^44\d{7}$/;
+      if (!universityIdRegex.test(university_id)) {
+        return c.json({ error: 'University ID must be 9 digits starting with 44 (e.g., 441234567)' }, 400);
+      }
+      
+      // Check if university ID already exists
+      const idExists = await db.checkUniversityIdExists(university_id);
+      if (idExists) {
+        console.log(`❌ Signup failed: University ID already registered - ${university_id}`);
         return c.json({ 
-          error: 'University ID must be 9 digits starting with 44',
-          messageAr: 'الرقم الجامعي يجب أن يكون 9 أرقام تبدأ بـ 44'
+          error: 'University ID already registered',
+          message: 'This University ID is already registered. Please use Sign In instead.',
+          messageAr: 'هذا الرقم الجامعي مسجل مسبقاً. الرجاء استخدام تسجيل الدخول.'
         }, 400);
       }
     }
     
-    const supabase = getSupabaseClient(true); // Service role
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    );
     
-    // Create auth user
-    console.log('🔐 Creating user in Auth...');
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+    // Check if email already exists
+    const { data: existingUsers } = await supabase.auth.admin.listUsers();
+    const emailExists = existingUsers?.users?.some(u => u.email === email);
+    if (emailExists) {
+      console.log(`❌ Signup failed: Email already registered - ${email}`);
+      return c.json({ 
+        error: 'Email already registered',
+        message: 'This email is already registered. Please use Sign In instead.',
+        messageAr: 'هذا البريد مسجل مسبقاً. الرجاء استخدام تسجيل الدخول.'
+      }, 400);
+    }
+    
+    // Create user in Supabase Auth
+    const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true,
+      email_confirm: true, // Auto-confirm since email server hasn't been configured
       user_metadata: { full_name, role, university_id: university_id || null }
     });
     
-    if (authError) {
-      console.log('❌ Auth error:', authError);
-      return c.json({ 
-        error: authError.message,
-        messageAr: 'فشل إنشاء الحساب'
-      }, 400);
+    if (error) {
+      console.log('Signup error:', error);
+      return c.json({ error: error.message }, 400);
     }
     
-    console.log('✅ User created in Auth:', authData.user.id);
+    // Store user in database
+    const userRecord = await db.createUser({
+      auth_id: data.user.id,
+      email,
+      full_name,
+      role,
+      university_id: university_id || undefined,
+    });
     
-    // Create profile
-    console.log('💾 Creating profile...');
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .insert({
-        id: authData.user.id,
-        email,
-        full_name,
-        role,
-        university_id: university_id || null
-      })
-      .select()
-      .single();
-    
-    if (profileError) {
-      console.log('❌ Profile error:', profileError);
-      await supabase.auth.admin.deleteUser(authData.user.id);
-      return c.json({ 
-        error: profileError.message,
-        messageAr: 'فشل إنشاء الملف الشخصي'
-      }, 500);
-    }
-    
-    console.log('✅ Profile created successfully');
+    // Log activity
+    await db.logActivity({
+      user_id: userRecord.id,
+      action: 'user_signup',
+      entity_type: 'user',
+      entity_id: userRecord.id,
+      log_status: 'success',
+    });
     
     return c.json({ 
       message: 'User created successfully',
-      messageAr: 'تم إنشاء الحساب بنجاح',
-      user: profileData
+      user: userRecord
     });
-  } catch (error: any) {
-    console.log('❌ Signup error:', error);
-    return c.json({ 
-      error: error.message,
-      messageAr: 'حدث خطأ أثناء التسجيل'
-    }, 500);
+  } catch (error) {
+    console.log('Signup error:', error);
+    return c.json({ error: 'Internal server error during signup' }, 500);
   }
 });
 
-// Get Current User
+// Get user info endpoint
 app.get("/make-server-90ad488b/me", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
+    
+    // Update last login
+    await db.updateUserLastLogin(user.id);
     
     return c.json({ user });
-  } catch (error: any) {
-    console.log('❌ Get user error:', error);
-    return c.json({ error: error.message }, 500);
+  } catch (error) {
+    console.log('Get user error:', error);
+    return c.json({ error: 'Internal server error while fetching user' }, 500);
   }
 });
 
-// =====================================================
-// 3. USERS MANAGEMENT (Admin)
-// =====================================================
-
-app.get("/make-server-90ad488b/users", async (c) => {
+// Session management - check and register session
+app.post("/make-server-90ad488b/session/register", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    if (user.role !== 'admin') {
-      return c.json({ error: 'Forbidden - Admin only' }, 403);
-    }
+    const accessToken = c.req.header('Authorization')?.split(' ')[1];
+    const sessionToken = crypto.randomUUID();
     
-    const supabase = getSupabaseClient();
+    // Check for active sessions
+    const activeSessions = await db.getActiveDeviceSessions(user.id);
     
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .order('created_at', { ascending: false });
-    
-    if (error) {
-      console.log('❌ Error fetching users:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    return c.json({ users: data || [] });
-  } catch (error: any) {
-    console.log('❌ Get users error:', error);
-    return c.json({ error: error.message }, 500);
-  }
-});
-
-// =====================================================
-// 4. COURSES MANAGEMENT
-// =====================================================
-
-// Get Courses
-app.get("/make-server-90ad488b/courses", async (c) => {
-  try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
-    }
-    
-    const supabase = getSupabaseClient();
-    
-    let query = supabase
-      .from('courses')
-      .select('*');
-    
-    // Instructor: only their courses
-    if (user.role === 'instructor') {
-      query = query.eq('instructor_id', user.id);
-    }
-    
-    // Student: only enrolled courses
-    if (user.role === 'student') {
-      const { data: enrollments } = await supabase
-        .from('enrollments')
-        .select('course_id')
-        .eq('student_id', user.id);
+    if (activeSessions.length > 0) {
+      const recentSession = activeSessions[0];
+      const sessionAge = Date.now() - new Date(recentSession.created_at).getTime();
       
-      const courseIds = enrollments?.map(e => e.course_id) || [];
+      // If session is less than 30 seconds old, it's likely the same login
+      if (sessionAge < 30000) {
+        return c.json({ 
+          session_id: recentSession.id,
+          message: 'Session already registered'
+        });
+      }
       
-      if (courseIds.length > 0) {
-        query = query.in('id', courseIds);
-      } else {
-        return c.json({ courses: [] });
+      // Check if session is still valid (less than 12 hours old)
+      if (sessionAge < 12 * 60 * 60 * 1000) {
+        return c.json({ 
+          error: 'Another session is active. Please logout from other device first.',
+          session_conflict: true
+        }, 409);
       }
     }
     
-    const { data, error } = await query.order('created_at', { ascending: false });
+    // Create new device session
+    const deviceSession = await db.createDeviceSession({
+      user_id: user.id,
+      device_fingerprint: 'browser-' + crypto.randomUUID(),
+      session_token: sessionToken,
+    });
     
-    if (error) {
-      console.log('❌ Error fetching courses:', error);
-      return c.json({ error: error.message }, 500);
-    }
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'session_register',
+      log_status: 'success',
+    });
     
-    return c.json({ courses: data || [] });
-  } catch (error: any) {
-    console.log('❌ Get courses error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ 
+      session_id: deviceSession.id,
+      message: 'Session registered successfully'
+    });
+  } catch (error) {
+    console.log('Session register error:', error);
+    return c.json({ error: 'Internal server error while registering session' }, 500);
   }
 });
 
-// Create Course
-app.post("/make-server-90ad488b/courses", async (c) => {
+// Session management - logout
+app.post("/make-server-90ad488b/session/logout", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    if (user.role !== 'admin' && user.role !== 'instructor') {
-      return c.json({ error: 'Forbidden - Admin or Instructor only' }, 403);
-    }
+    // Deactivate all user sessions
+    await db.deactivateAllUserSessions(user.id);
     
-    const body = await c.req.json();
-    const { course_name, course_code, instructor_id, semester, year, department, credits, description } = body;
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'session_logout',
+      log_status: 'success',
+    });
     
-    if (!course_name || !course_code) {
-      return c.json({ 
-        error: 'Missing required fields',
-        messageAr: 'اسم المادة ورمز المادة مطلوبان'
-      }, 400);
-    }
-    
-    const supabase = getSupabaseClient();
-    
-    const { data, error } = await supabase
-      .from('courses')
-      .insert({
-        course_name,
-        course_code,
-        instructor_id: instructor_id || (user.role === 'instructor' ? user.id : null),
-        semester: semester || null,
-        year: year || null,
-        department: department || null,
-        credits: credits || null,
-        description: description || null,
-        is_active: true
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('❌ Error creating course:', error);
-      return c.json({ 
-        error: error.message,
-        messageAr: 'فشل إنشاء المادة'
-      }, 500);
-    }
-    
-    console.log('✅ Course created:', data);
-    return c.json({ course: data });
-  } catch (error: any) {
-    console.log('❌ Create course error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ message: 'Session cleared successfully' });
+  } catch (error) {
+    console.log('Session logout error:', error);
+    return c.json({ error: 'Internal server error while logging out' }, 500);
   }
 });
 
-// Delete Course
-app.delete("/make-server-90ad488b/courses/:id", async (c) => {
+// ==================== USER MANAGEMENT (ADMIN) ====================
+
+app.delete("/make-server-90ad488b/users/:userId", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
     if (user.role !== 'admin') {
-      return c.json({ error: 'Forbidden - Admin only' }, 403);
+      return c.json({ error: 'Admin access required' }, 403);
     }
     
-    const courseId = c.req.param('id');
-    const supabase = getSupabaseClient();
+    const userId = c.req.param('userId');
     
-    const { error } = await supabase
-      .from('courses')
-      .delete()
-      .eq('id', courseId);
+    // Get user to delete (for logging)
+    const userToDelete = await db.getUserByAuthId(userId);
     
-    if (error) {
-      console.log('❌ Error deleting course:', error);
-      return c.json({ error: error.message }, 500);
-    }
+    // Delete from Supabase Auth
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    );
     
-    console.log('✅ Course deleted:', courseId);
-    return c.json({ message: 'Course deleted successfully' });
-  } catch (error: any) {
-    console.log('❌ Delete course error:', error);
-    return c.json({ error: error.message }, 500);
+    await supabase.auth.admin.deleteUser(userId);
+    
+    // Database will cascade delete due to ON DELETE CASCADE
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'user_delete',
+      entity_type: 'user',
+      entity_id: userId,
+      details: { deleted_user_email: userToDelete?.email },
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.log('Delete user error:', error);
+    return c.json({ error: 'Internal server error while deleting user' }, 500);
   }
 });
 
-// =====================================================
-// 5. ENROLLMENTS
-// =====================================================
-
-// Get Enrollments
-app.get("/make-server-90ad488b/enrollments", async (c) => {
+// Get all users (admin only)
+app.get("/make-server-90ad488b/users", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    const supabase = getSupabaseClient();
-    const courseId = c.req.query('course_id');
-    
-    let query = supabase
-      .from('enrollments')
-      .select(`
-        *,
-        student:student_id (id, full_name, email, university_id),
-        course:course_id (id, course_name, course_code)
-      `);
-    
-    if (courseId) {
-      query = query.eq('course_id', courseId);
+    if (user.role !== 'admin' && user.role !== 'supervisor') {
+      return c.json({ error: 'Admin or Supervisor access required' }, 403);
     }
     
-    if (user.role === 'student') {
-      query = query.eq('student_id', user.id);
-    }
+    const users = await db.getAllUsers();
     
-    const { data, error } = await query.order('enrolled_at', { ascending: false });
-    
-    if (error) {
-      console.log('❌ Error fetching enrollments:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    return c.json({ enrollments: data || [] });
-  } catch (error: any) {
-    console.log('❌ Get enrollments error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ users });
+  } catch (error) {
+    console.log('Get users error:', error);
+    return c.json({ error: 'Internal server error while fetching users' }, 500);
   }
 });
 
-// Create Enrollment
-app.post("/make-server-90ad488b/enrollments", async (c) => {
+// ==================== COURSE MANAGEMENT ====================
+
+app.post("/make-server-90ad488b/courses", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
+    // Allow both admin and instructor to create courses
     if (user.role !== 'admin' && user.role !== 'instructor') {
-      return c.json({ error: 'Forbidden' }, 403);
+      return c.json({ error: 'Admin or Instructor access required' }, 403);
     }
     
-    const body = await c.req.json();
-    const { student_id, course_id } = body;
+    const courseData = await c.req.json();
     
-    if (!student_id || !course_id) {
-      return c.json({ 
-        error: 'Missing student_id or course_id',
-        messageAr: 'معرف الطالب ومعرف المادة مطلوبان'
-      }, 400);
+    if (!courseData.course_name || !courseData.course_code) {
+      return c.json({ error: 'Missing required fields' }, 400);
     }
     
-    const supabase = getSupabaseClient();
-    
-    const { data, error } = await supabase
-      .from('enrollments')
-      .insert({
-        student_id,
-        course_id,
-        enrolled_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('❌ Error creating enrollment:', error);
-      return c.json({ 
-        error: error.message,
-        messageAr: 'فشل تسجيل الطالب'
-      }, 500);
+    // If instructor creates course, automatically assign them as instructor
+    if (user.role === 'instructor') {
+      courseData.instructor_id = user.id;
     }
     
-    console.log('✅ Enrollment created:', data);
-    return c.json({ enrollment: data });
-  } catch (error: any) {
-    console.log('❌ Create enrollment error:', error);
-    return c.json({ error: error.message }, 500);
+    // Add Arabic name if not provided
+    if (!courseData.course_name_ar) {
+      courseData.course_name_ar = courseData.course_name;
+    }
+    
+    const course = await db.createCourse(courseData);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'course_create',
+      entity_type: 'course',
+      entity_id: course.id,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Course created successfully', course });
+  } catch (error) {
+    console.log('Create course error:', error);
+    return c.json({ error: 'Internal server error while creating course' }, 500);
   }
 });
 
-// Delete Enrollment
-app.delete("/make-server-90ad488b/enrollments/:id", async (c) => {
+app.get("/make-server-90ad488b/courses", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    if (user.role !== 'admin' && user.role !== 'instructor') {
-      return c.json({ error: 'Forbidden' }, 403);
+    let courses = [];
+    
+    if (user.role === 'instructor') {
+      // Get instructor's courses
+      courses = await db.getCoursesByInstructor(user.id);
+    } else if (user.role === 'student') {
+      // Get enrolled courses
+      const enrollments = await db.getEnrollmentsByStudent(user.id);
+      courses = enrollments.map(e => e.course).filter(Boolean);
+    } else {
+      // Admin/Supervisor can see all courses
+      courses = await db.getAllCourses();
     }
     
-    const enrollmentId = c.req.param('id');
-    const supabase = getSupabaseClient();
-    
-    const { error } = await supabase
-      .from('enrollments')
-      .delete()
-      .eq('id', enrollmentId);
-    
-    if (error) {
-      console.log('❌ Error deleting enrollment:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    console.log('✅ Enrollment deleted:', enrollmentId);
-    return c.json({ message: 'Enrollment deleted successfully' });
-  } catch (error: any) {
-    console.log('❌ Delete enrollment error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ courses });
+  } catch (error) {
+    console.log('Get courses error:', error);
+    return c.json({ error: 'Internal server error while fetching courses' }, 500);
   }
 });
 
-// =====================================================
-// 6. SESSIONS MANAGEMENT
-// =====================================================
-
-// Get Sessions
-app.get("/make-server-90ad488b/sessions", async (c) => {
+app.put("/make-server-90ad488b/courses/:courseId", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    const supabase = getSupabaseClient();
-    const courseId = c.req.query('course_id');
-    const isActive = c.req.query('is_active');
-    
-    let query = supabase
-      .from('sessions')
-      .select('*');
-    
-    if (courseId) {
-      query = query.eq('course_id', courseId);
+    if (user.role !== 'admin') {
+      return c.json({ error: 'Admin access required' }, 403);
     }
     
-    if (isActive !== undefined) {
-      query = query.eq('active', isActive === 'true');
-    }
-    
-    const { data, error } = await query.order('created_at', { ascending: false });
-    
-    if (error) {
-      console.log('❌ Error fetching sessions:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    return c.json({ sessions: data || [] });
-  } catch (error: any) {
-    console.log('❌ Get sessions error:', error);
-    return c.json({ error: error.message }, 500);
-  }
-});
-
-// Create Session
-app.post("/make-server-90ad488b/sessions", async (c) => {
-  try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Forbidden - Instructor only' }, 403);
-    }
-    
-    const body = await c.req.json();
-    const { course_id, session_date, session_time, duration, session_type, location, session_code } = body;
-    
-    if (!course_id) {
-      return c.json({ 
-        error: 'Missing course_id',
-        messageAr: 'معرف المادة مطلوب'
-      }, 400);
-    }
-    
-    const code = session_code || generateCode(6);
-    const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + (duration || 15));
-    
-    const supabase = getSupabaseClient();
-    
-    const { data, error } = await supabase
-      .from('sessions')
-      .insert({
-        course_id,
-        code,
-        session_date: session_date || new Date().toISOString().split('T')[0],
-        start_time: session_time || new Date().toTimeString().split(' ')[0],
-        session_type: session_type || 'attendance',
-        location: location || null,
-        active: true,
-        expires_at: expiresAt.toISOString()
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('❌ Error creating session:', error);
-      return c.json({ 
-        error: error.message,
-        messageAr: 'فشل إنشاء الجلسة'
-      }, 500);
-    }
-    
-    console.log('✅ Session created:', data);
-    return c.json({ session: data });
-  } catch (error: any) {
-    console.log('❌ Create session error:', error);
-    return c.json({ error: error.message }, 500);
-  }
-});
-
-// Update Session
-app.put("/make-server-90ad488b/sessions/:id", async (c) => {
-  try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
-    }
-    
-    if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Forbidden' }, 403);
-    }
-    
-    const sessionId = c.req.param('id');
+    const courseId = c.req.param('courseId');
     const updates = await c.req.json();
     
-    const supabase = getSupabaseClient();
+    const course = await db.updateCourse(courseId, updates);
     
-    const { data, error } = await supabase
-      .from('sessions')
-      .update(updates)
-      .eq('id', sessionId)
-      .select()
-      .single();
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'course_update',
+      entity_type: 'course',
+      entity_id: courseId,
+      log_status: 'success',
+    });
     
-    if (error) {
-      console.log('❌ Error updating session:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    console.log('✅ Session updated:', data);
-    return c.json({ session: data });
-  } catch (error: any) {
-    console.log('❌ Update session error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ message: 'Course updated successfully', course });
+  } catch (error) {
+    console.log('Update course error:', error);
+    return c.json({ error: 'Internal server error while updating course' }, 500);
   }
 });
 
-// Delete Session
-app.delete("/make-server-90ad488b/sessions/:id", async (c) => {
+app.delete("/make-server-90ad488b/courses/:courseId", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Forbidden' }, 403);
+    const courseId = c.req.param('courseId');
+    const course = await db.getCourseById(courseId);
+    
+    if (!course) {
+      return c.json({ error: 'Course not found' }, 404);
     }
     
-    const sessionId = c.req.param('id');
-    const supabase = getSupabaseClient();
-    
-    const { error } = await supabase
-      .from('sessions')
-      .delete()
-      .eq('id', sessionId);
-    
-    if (error) {
-      console.log('❌ Error deleting session:', error);
-      return c.json({ error: error.message }, 500);
+    // Allow admin to delete any course, or instructor to delete their own courses
+    if (user.role !== 'admin' && course.instructor_id !== user.id) {
+      return c.json({ error: 'You can only delete your own courses' }, 403);
     }
     
-    console.log('✅ Session deleted:', sessionId);
-    return c.json({ message: 'Session deleted successfully' });
-  } catch (error: any) {
-    console.log('❌ Delete session error:', error);
-    return c.json({ error: error.message }, 500);
+    // Delete course (database will cascade delete related data)
+    await db.deleteCourse(courseId);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'course_delete',
+      entity_type: 'course',
+      entity_id: courseId,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Course deleted successfully' });
+  } catch (error) {
+    console.log('Delete course error:', error);
+    return c.json({ error: 'Internal server error while deleting course' }, 500);
   }
 });
 
-// =====================================================
-// 7. ATTENDANCE
-// =====================================================
+// ==================== ENROLLMENT ====================
 
-// Get Attendance
-app.get("/make-server-90ad488b/attendance", async (c) => {
+app.post("/make-server-90ad488b/enrollments", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    console.log('📝 POST /enrollments - Enrollment request received');
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      console.log('❌ Enrollment error: Unauthorized');
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    const supabase = getSupabaseClient();
-    const studentId = c.req.query('student_id');
-    const sessionId = c.req.query('session_id');
-    const courseId = c.req.query('course_id');
-    
-    let query = supabase
-      .from('attendance')
-      .select('*');
-    
-    if (studentId) {
-      query = query.eq('student_id', studentId);
+    if (user.role !== 'admin') {
+      console.log('❌ Enrollment error: Not admin');
+      return c.json({ error: 'Admin access required' }, 403);
     }
     
-    if (sessionId) {
-      query = query.eq('session_id', sessionId);
+    const { student_id, course_id } = await c.req.json();
+    
+    if (!student_id || !course_id) {
+      console.log('❌ Enrollment error: Missing fields');
+      return c.json({ error: 'Missing required fields' }, 400);
     }
     
-    if (courseId) {
-      query = query.eq('course_id', courseId);
+    const enrollment = await db.createEnrollment(student_id, course_id);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'enrollment_create',
+      entity_type: 'enrollment',
+      entity_id: enrollment.id,
+      log_status: 'success',
+    });
+    
+    console.log('✅ Enrollment saved successfully!');
+    
+    return c.json({ message: 'Student enrolled successfully', enrollment });
+  } catch (error) {
+    console.log('❌ Create enrollment error:', error);
+    return c.json({ error: 'Internal server error while creating enrollment' }, 500);
+  }
+});
+
+app.get("/make-server-90ad488b/enrollments/:courseId", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const courseId = c.req.param('courseId');
+    const enrollments = await db.getEnrollmentsByCourse(courseId);
+    
+    return c.json({ enrollments });
+  } catch (error) {
+    console.log('Get enrollments error:', error);
+    return c.json({ error: 'Internal server error while fetching enrollments' }, 500);
+  }
+});
+
+// ==================== SCHEDULE MANAGEMENT ====================
+
+app.post("/make-server-90ad488b/schedules", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    if (user.role !== 'admin' && user.role !== 'instructor') {
+      return c.json({ error: 'Instructor or Admin access required' }, 403);
+    }
+    
+    const scheduleData = await c.req.json();
+    
+    if (!scheduleData.course_id || !scheduleData.day_of_week || !scheduleData.start_time || !scheduleData.end_time) {
+      return c.json({ error: 'Missing required fields' }, 400);
+    }
+    
+    const schedule = await db.createSchedule(scheduleData);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'schedule_create',
+      entity_type: 'schedule',
+      entity_id: schedule.id,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Schedule created successfully', schedule });
+  } catch (error) {
+    console.log('Create schedule error:', error);
+    return c.json({ error: 'Internal server error while creating schedule' }, 500);
+  }
+});
+
+app.get("/make-server-90ad488b/schedules", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const schedules = await db.getAllSchedules();
+    
+    // Filter by role
+    if (user.role === 'instructor') {
+      const instructorSchedules = schedules.filter(s => s.course?.instructor_id === user.id);
+      return c.json({ schedules: instructorSchedules });
     }
     
     if (user.role === 'student') {
-      query = query.eq('student_id', user.id);
+      const enrollments = await db.getEnrollmentsByStudent(user.id);
+      const enrolledCourseIds = enrollments.map(e => e.course_id);
+      const studentSchedules = schedules.filter(s => enrolledCourseIds.includes(s.course_id));
+      return c.json({ schedules: studentSchedules });
     }
     
-    const { data, error } = await query.order('created_at', { ascending: false });
-    
-    if (error) {
-      console.log('❌ Error fetching attendance:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    return c.json({ attendance: data || [] });
-  } catch (error: any) {
-    console.log('❌ Get attendance error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ schedules });
+  } catch (error) {
+    console.log('Get schedules error:', error);
+    return c.json({ error: 'Internal server error while fetching schedules' }, 500);
   }
 });
 
-// Submit Attendance
+app.delete("/make-server-90ad488b/schedules/:scheduleId", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    if (user.role !== 'admin' && user.role !== 'instructor') {
+      return c.json({ error: 'Instructor or Admin access required' }, 403);
+    }
+    
+    const scheduleId = c.req.param('scheduleId');
+    await db.deleteSchedule(scheduleId);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'schedule_delete',
+      entity_type: 'schedule',
+      entity_id: scheduleId,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Schedule deleted successfully' });
+  } catch (error) {
+    console.log('Delete schedule error:', error);
+    return c.json({ error: 'Internal server error while deleting schedule' }, 500);
+  }
+});
+
+// ==================== SESSION MANAGEMENT (ATTENDANCE CODES & LIVE STREAMING) ====================
+
+app.post("/make-server-90ad488b/sessions", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    if (user.role !== 'instructor' && user.role !== 'admin') {
+      return c.json({ error: 'Instructor access required' }, 403);
+    }
+    
+    const { course_id, duration_minutes, session_type, title, description, location } = await c.req.json();
+    
+    if (!course_id) {
+      return c.json({ error: 'Missing course_id' }, 400);
+    }
+    
+    // Verify instructor teaches this course (if instructor)
+    if (user.role === 'instructor') {
+      const course = await db.getCourseById(course_id);
+      if (!course || course.instructor_id !== user.id) {
+        return c.json({ error: 'You are not authorized to create sessions for this course' }, 403);
+      }
+    }
+    
+    const code = generateSessionCode();
+    
+    const session = await db.createSession({
+      course_id,
+      instructor_id: user.id,
+      session_type: session_type || 'attendance',
+      title,
+      description,
+      code,
+      duration_minutes: duration_minutes || 15,
+      location,
+    });
+    
+    // Create notifications for students if it's a live session
+    if (session_type === 'live') {
+      const enrollments = await db.getEnrollmentsByCourse(course_id);
+      const course = await db.getCourseById(course_id);
+      for (const enrollment of enrollments) {
+        await db.createNotification({
+          user_id: enrollment.student_id,
+          title: 'Live Session Started',
+          title_ar: 'بدأت جلسة بث مباشر',
+          message: `A live session has started for ${course?.course_name || 'course'}`,
+          message_ar: `بدأت جلسة بث مباشر لمقرر ${course?.course_name_ar || 'المقرر'}`,
+          notification_type: 'session_started',
+          related_id: session.id,
+          related_type: 'session',
+          priority: 'high',
+        });
+      }
+    }
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'session_create',
+      entity_type: 'session',
+      entity_id: session.id,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Session created successfully', session });
+  } catch (error) {
+    console.log('Create session error:', error);
+    return c.json({ error: 'Internal server error while creating session' }, 500);
+  }
+});
+
+app.get("/make-server-90ad488b/sessions/:courseId", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const courseId = c.req.param('courseId');
+    const sessions = await db.getSessionsByCourse(courseId);
+    
+    return c.json({ sessions });
+  } catch (error) {
+    console.log('Get sessions error:', error);
+    return c.json({ error: 'Internal server error while fetching sessions' }, 500);
+  }
+});
+
+// Get all active live sessions
+app.get("/make-server-90ad488b/sessions", async (c) => {
+  try {
+    console.log('📡 GET /sessions - Fetching active live sessions');
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    // Get all active live sessions
+    let sessions = await db.getAllActiveLiveSessions();
+    
+    // Filter by role
+    if (user.role === 'student') {
+      const enrollments = await db.getEnrollmentsByStudent(user.id);
+      const enrolledCourseIds = enrollments.map(e => e.course_id);
+      sessions = sessions.filter(s => enrolledCourseIds.includes(s.course_id));
+    } else if (user.role === 'instructor') {
+      sessions = sessions.filter(s => s.instructor_id === user.id);
+    }
+    
+    // Get courses
+    const courseIds = [...new Set(sessions.map(s => s.course_id))];
+    const courses = [];
+    for (const courseId of courseIds) {
+      const course = await db.getCourseById(courseId);
+      if (course) courses.push(course);
+    }
+    
+    return c.json({ 
+      data: {
+        sessions,
+        courses
+      }
+    });
+  } catch (error) {
+    console.log('Get live sessions error:', error);
+    return c.json({ error: 'Internal server error while fetching live sessions' }, 500);
+  }
+});
+
+// Get all sessions (both regular and live)
+app.get("/make-server-90ad488b/sessions/all", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    let sessions = await db.getAllSessions();
+    
+    // Filter based on role
+    if (user.role === 'instructor') {
+      sessions = sessions.filter(s => s.instructor_id === user.id);
+    } else if (user.role === 'student') {
+      const enrollments = await db.getEnrollmentsByStudent(user.id);
+      const enrolledCourseIds = enrollments.map(e => e.course_id);
+      sessions = sessions.filter(s => enrolledCourseIds.includes(s.course_id));
+    }
+    
+    return c.json({ sessions });
+  } catch (error) {
+    console.log('Get all sessions error:', error);
+    return c.json({ error: 'Internal server error while fetching sessions' }, 500);
+  }
+});
+
+// Start live session
+app.post("/make-server-90ad488b/live-sessions/:id/start", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    if (user.role !== 'instructor' && user.role !== 'admin') {
+      return c.json({ error: 'Instructor access required' }, 403);
+    }
+    
+    const sessionId = c.req.param('id');
+    
+    console.log('🔍 [Server] Starting live session:', {
+      sessionId,
+      userId: user.id,
+      userRole: user.role,
+    });
+    
+    const sessions = await db.getAllSessions();
+    const session = sessions.find(s => s.id === sessionId);
+    
+    if (!session) {
+      console.log('❌ [Server] Session not found:', sessionId);
+      return c.json({ error: 'Session not found' }, 404);
+    }
+    
+    console.log('📋 [Server] Session details:', {
+      sessionId: session.id,
+      instructorId: session.instructor_id,
+      userId: user.id,
+      isMatch: session.instructor_id === user.id,
+    });
+    
+    // Allow admin to start any session, or instructor to start their own session
+    if (user.role !== 'admin' && session.instructor_id !== user.id) {
+      console.log('❌ [Server] Authorization failed:', {
+        sessionInstructorId: session.instructor_id,
+        currentUserId: user.id,
+        userRole: user.role,
+      });
+      return c.json({ error: 'You are not authorized to start this session' }, 403);
+    }
+    
+    // Generate unique Jitsi room name
+    const roomName = `kku-session-${sessionId.substring(0, 8)}-${Date.now()}`;
+    const meetingUrl = `https://meet.jit.si/${roomName}`;
+    
+    // Update session to mark as active
+    const updatedSession = await db.updateSession(sessionId, {
+      stream_active: true,
+      is_active: true,
+    });
+    
+    console.log('✅ [Server] Live session started:', {
+      sessionId,
+      roomName,
+      meetingUrl,
+    });
+    
+    return c.json({
+      success: true,
+      session: {
+        ...updatedSession,
+        meeting_url: meetingUrl,
+        attendance_code: session.code,
+      },
+    });
+  } catch (error) {
+    console.log('Start live session error:', error);
+    return c.json({ error: 'Internal server error while starting live session' }, 500);
+  }
+});
+
+// End live session
+app.post("/make-server-90ad488b/live-sessions/:id/end", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    if (user.role !== 'instructor' && user.role !== 'admin') {
+      return c.json({ error: 'Instructor access required' }, 403);
+    }
+    
+    const sessionId = c.req.param('id');
+    
+    await db.updateSession(sessionId, {
+      stream_active: false,
+      is_active: false,
+    });
+    
+    console.log('✅ [Server] Live session ended:', sessionId);
+    
+    return c.json({
+      success: true,
+      message: 'Live session ended successfully',
+    });
+  } catch (error) {
+    console.log('End live session error:', error);
+    return c.json({ error: 'Internal server error while ending live session' }, 500);
+  }
+});
+
+app.post("/make-server-90ad488b/sessions/:sessionId/deactivate", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    if (user.role !== 'instructor') {
+      return c.json({ error: 'Instructor access required' }, 403);
+    }
+    
+    const sessionId = c.req.param('sessionId');
+    const session = await db.getSessionsByCourse('');
+    const targetSession = session.find(s => s.id === sessionId);
+    
+    if (!targetSession) {
+      return c.json({ error: 'Session not found' }, 404);
+    }
+    
+    if (targetSession.instructor_id !== user.id) {
+      return c.json({ error: 'You are not authorized to deactivate this session' }, 403);
+    }
+    
+    await db.deactivateSession(sessionId);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'session_deactivate',
+      entity_type: 'session',
+      entity_id: sessionId,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Session deactivated successfully' });
+  } catch (error) {
+    console.log('Deactivate session error:', error);
+    return c.json({ error: 'Internal server error while deactivating session' }, 500);
+  }
+});
+
+app.delete("/make-server-90ad488b/sessions/:sessionId", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    if (user.role !== 'instructor') {
+      return c.json({ error: 'Instructor access required' }, 403);
+    }
+    
+    const sessionId = c.req.param('sessionId');
+    const sessions = await db.getAllSessions();
+    const session = sessions.find(s => s.id === sessionId);
+    
+    if (!session) {
+      return c.json({ error: 'Session not found' }, 404);
+    }
+    
+    if (session.instructor_id !== user.id) {
+      return c.json({ error: 'You are not authorized to delete this session' }, 403);
+    }
+    
+    // Delete session (database will cascade delete attendance records)
+    await db.deleteSession(sessionId);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'session_delete',
+      entity_type: 'session',
+      entity_id: sessionId,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Session deleted successfully' });
+  } catch (error) {
+    console.log('Delete session error:', error);
+    return c.json({ error: 'Internal server error while deleting session' }, 500);
+  }
+});
+
+// ==================== ATTENDANCE ====================
+
 app.post("/make-server-90ad488b/attendance", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
     if (user.role !== 'student') {
-      return c.json({ error: 'Forbidden - Students only' }, 403);
+      return c.json({ error: 'Student access required' }, 403);
     }
     
-    const body = await c.req.json();
-    const { session_code, device_fingerprint, location } = body;
+    const { session_code, device_fingerprint } = await c.req.json();
     
     if (!session_code) {
-      return c.json({ 
-        error: 'Missing session_code',
-        messageAr: 'رمز الجلسة مطلوب'
-      }, 400);
+      return c.json({ error: 'Missing session code' }, 400);
     }
     
-    const supabase = getSupabaseClient();
-    
-    // Find session
-    const { data: session, error: sessionError } = await supabase
-      .from('sessions')
-      .select('*')
-      .eq('code', session_code.toUpperCase())
-      .eq('active', true)
-      .single();
-    
-    if (sessionError || !session) {
-      return c.json({ 
-        error: 'Invalid or expired session code',
-        messageAr: 'رمز الجلسة غير صحيح أو منتهي'
-      }, 404);
+    // Find session by code
+    const session = await db.getSessionByCode(session_code);
+    if (!session || !session.is_active) {
+      return c.json({ error: 'Invalid or inactive session code' }, 400);
     }
     
-    // Check expiry
-    if (new Date(session.expires_at) < new Date()) {
-      return c.json({ 
-        error: 'Session has expired',
-        messageAr: 'انتهت صلاحية الجلسة'
-      }, 400);
+    // Check if session expired
+    if (new Date(session.end_time) < new Date()) {
+      return c.json({ error: 'Session has expired' }, 400);
     }
     
-    // Check enrollment
-    const { data: enrollment } = await supabase
-      .from('enrollments')
-      .select('*')
-      .eq('student_id', user.id)
-      .eq('course_id', session.course_id)
-      .single();
-    
-    if (!enrollment) {
-      return c.json({ 
-        error: 'Not enrolled in this course',
-        messageAr: 'غير مسجل في هذا المقرر'
-      }, 403);
+    // Check if student is enrolled in the course
+    const enrollments = await db.getEnrollmentsByStudent(user.id);
+    const isEnrolled = enrollments.some(e => e.course_id === session.course_id);
+    if (!isEnrolled) {
+      return c.json({ error: 'You are not enrolled in this course' }, 403);
     }
     
-    // Record attendance
-    const { data, error } = await supabase
-      .from('attendance')
-      .upsert({
-        student_id: user.id,
-        session_id: session.id,
-        course_id: session.course_id,
-        status: 'present',
-        device_fingerprint: device_fingerprint || null,
-        location: location || null,
-        created_at: new Date().toISOString()
-      }, {
-        onConflict: 'student_id,session_id'
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('❌ Error recording attendance:', error);
-      return c.json({ error: error.message }, 500);
+    // Check if already marked attendance
+    const hasAttendance = await db.checkAttendanceExists(session.id, user.id);
+    if (hasAttendance) {
+      return c.json({ error: 'Attendance already recorded for this session' }, 400);
     }
     
-    console.log('✅ Attendance recorded:', data);
-    return c.json({ 
-      message: 'Attendance recorded successfully',
-      messageAr: 'تم تسجيل الحضور بنجاح',
-      attendance: data
+    // Create attendance record
+    const attendance = await db.createAttendanceRecord({
+      session_id: session.id,
+      student_id: user.id,
+      course_id: session.course_id,
+      attendance_status: 'present',
+      verification_method: 'code',
+      device_fingerprint: device_fingerprint || 'unknown',
     });
-  } catch (error: any) {
-    console.log('❌ Submit attendance error:', error);
-    return c.json({ error: error.message }, 500);
+    
+    // Log activity
+    await db.logActivity({
+      user_id: user.id,
+      action: 'attendance_record',
+      entity_type: 'attendance',
+      entity_id: attendance.id,
+      log_status: 'success',
+    });
+    
+    return c.json({ message: 'Attendance recorded successfully', attendance });
+  } catch (error) {
+    console.log('Record attendance error:', error);
+    return c.json({ error: 'Internal server error while recording attendance' }, 500);
   }
 });
 
-// =====================================================
-// 8. LIVE SESSIONS
-// =====================================================
-
-// Get Live Sessions
-app.get("/make-server-90ad488b/live-sessions", async (c) => {
+app.get("/make-server-90ad488b/attendance/student", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
-    const supabase = getSupabaseClient();
-    const courseId = c.req.query('course_id');
-    const status = c.req.query('status');
-    
-    let query = supabase
-      .from('live_sessions')
-      .select('*');
-    
-    if (courseId) {
-      query = query.eq('course_id', courseId);
+    if (user.role !== 'student') {
+      return c.json({ error: 'Student access required' }, 403);
     }
     
-    if (status) {
-      query = query.eq('status', status);
-    }
+    const attendance = await db.getAttendanceByStudent(user.id);
     
-    const { data, error } = await query.order('created_at', { ascending: false });
-    
-    if (error) {
-      console.log('❌ Error fetching live sessions:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    return c.json({ live_sessions: data || [] });
-  } catch (error: any) {
-    console.log('❌ Get live sessions error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ attendance });
+  } catch (error) {
+    console.log('Get student attendance error:', error);
+    return c.json({ error: 'Internal server error while fetching student attendance' }, 500);
   }
 });
 
-// Create Live Session
-app.post("/make-server-90ad488b/live-sessions", async (c) => {
+app.get("/make-server-90ad488b/attendance/course/:courseId", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
     if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Forbidden - Instructor only' }, 403);
+      return c.json({ error: 'Instructor or Admin access required' }, 403);
     }
     
-    const body = await c.req.json();
-    const { course_id, title, description, scheduled_start, scheduled_end } = body;
+    const courseId = c.req.param('courseId');
     
-    if (!course_id || !title) {
-      return c.json({ 
-        error: 'Missing required fields',
-        messageAr: 'معرف المادة والعنوان مطلوبان'
-      }, 400);
+    // Verify instructor teaches this course (if instructor)
+    if (user.role === 'instructor') {
+      const course = await db.getCourseById(courseId);
+      if (!course || course.instructor_id !== user.id) {
+        return c.json({ error: 'You are not authorized to view this course attendance' }, 403);
+      }
     }
     
-    const roomName = `kku_${generateCode(10)}`;
-    const meetingUrl = `https://meet.jit.si/${roomName}`;
+    const attendance = await db.getAttendanceByCourse(courseId);
     
-    const supabase = getSupabaseClient();
-    
-    const { data, error } = await supabase
-      .from('live_sessions')
-      .insert({
-        course_id,
-        instructor_id: user.id,
-        title,
-        description: description || null,
-        room_name: roomName,
-        meeting_url: meetingUrl,
-        scheduled_start: scheduled_start || new Date().toISOString(),
-        scheduled_end: scheduled_end || new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        status: 'scheduled'
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('❌ Error creating live session:', error);
-      return c.json({ 
-        error: error.message,
-        messageAr: 'فشل إنشاء الجلسة المباشرة'
-      }, 500);
-    }
-    
-    console.log('✅ Live session created:', data);
-    return c.json({ live_session: data });
-  } catch (error: any) {
-    console.log('❌ Create live session error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ attendance });
+  } catch (error) {
+    console.log('Get course attendance error:', error);
+    return c.json({ error: 'Internal server error while fetching course attendance' }, 500);
   }
 });
 
-// Update Live Session Status
-app.put("/make-server-90ad488b/live-sessions/:id/status", async (c) => {
+app.get("/make-server-90ad488b/attendance/today", async (c) => {
   try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
     
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    let attendance = await db.getTodayAttendance();
+    
+    // Filter by role
+    if (user.role === 'instructor') {
+      const courses = await db.getCoursesByInstructor(user.id);
+      const courseIds = courses.map(c => c.id);
+      attendance = attendance.filter(a => courseIds.includes(a.course_id));
+    } else if (user.role === 'student') {
+      attendance = attendance.filter(a => a.student_id === user.id);
+    }
+    
+    return c.json({ attendance });
+  } catch (error) {
+    console.log('Get today attendance error:', error);
+    return c.json({ error: 'Internal server error while fetching today attendance' }, 500);
+  }
+});
+
+// ==================== REPORTS ====================
+
+app.get("/make-server-90ad488b/reports/course/:courseId", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
     if (user.role !== 'instructor' && user.role !== 'admin') {
-      return c.json({ error: 'Forbidden' }, 403);
+      return c.json({ error: 'Instructor or Admin access required' }, 403);
     }
     
-    const sessionId = c.req.param('id');
-    const body = await c.req.json();
-    const { status } = body;
+    const courseId = c.req.param('courseId');
     
-    const validStatuses = ['scheduled', 'live', 'ended', 'cancelled'];
-    if (!validStatuses.includes(status)) {
-      return c.json({ error: 'Invalid status' }, 400);
+    // Verify instructor teaches this course (if instructor)
+    if (user.role === 'instructor') {
+      const course = await db.getCourseById(courseId);
+      if (!course || course.instructor_id !== user.id) {
+        return c.json({ error: 'You are not authorized to view this course report' }, 403);
+      }
     }
     
-    const supabase = getSupabaseClient();
+    // Get enrollments, sessions, and attendance
+    const enrollments = await db.getEnrollmentsByCourse(courseId);
+    const sessions = await db.getSessionsByCourse(courseId);
+    const attendance = await db.getAttendanceByCourse(courseId);
     
-    const updates: any = { status };
+    // Build report
+    const report = enrollments.map(enrollment => {
+      const studentAttendance = attendance.filter(a => a.student_id === enrollment.student_id);
+      const attendanceRate = sessions.length > 0 
+        ? (studentAttendance.length / sessions.length) * 100 
+        : 0;
+      
+      return {
+        student_id: enrollment.student_id,
+        student_name: enrollment.student?.full_name || 'Unknown',
+        student_email: enrollment.student?.email || '',
+        total_sessions: sessions.length,
+        attended_sessions: studentAttendance.length,
+        attendance_rate: Math.round(attendanceRate),
+        attendance_records: studentAttendance
+      };
+    });
     
-    if (status === 'live') {
-      updates.actual_start = new Date().toISOString();
-    } else if (status === 'ended') {
-      updates.actual_end = new Date().toISOString();
-    }
-    
-    const { data, error } = await supabase
-      .from('live_sessions')
-      .update(updates)
-      .eq('id', sessionId)
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('❌ Error updating live session:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    console.log('✅ Live session updated:', data);
-    return c.json({ live_session: data });
-  } catch (error: any) {
-    console.log('❌ Update live session error:', error);
-    return c.json({ error: error.message }, 500);
+    return c.json({ report });
+  } catch (error) {
+    console.log('Get course report error:', error);
+    return c.json({ error: 'Internal server error while generating course report' }, 500);
   }
 });
 
-// =====================================================
-// 9. STATS & ANALYTICS
-// =====================================================
+app.get("/make-server-90ad488b/reports/overview", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const stats = await db.getSystemStats();
+    let overview = { ...stats };
+    
+    // Add role-specific stats
+    if (user.role === 'instructor') {
+      const courses = await db.getCoursesByInstructor(user.id);
+      const courseIds = courses.map(c => c.id);
+      
+      let sessionsCount = 0;
+      let attendanceCount = 0;
+      for (const courseId of courseIds) {
+        const sessions = await db.getSessionsByCourse(courseId);
+        const attendance = await db.getAttendanceByCourse(courseId);
+        sessionsCount += sessions.length;
+        attendanceCount += attendance.length;
+      }
+      
+      overview = {
+        ...overview,
+        my_courses: courses.length,
+        my_sessions: sessionsCount,
+        my_attendance_records: attendanceCount
+      };
+    }
+    
+    if (user.role === 'student') {
+      const enrollments = await db.getEnrollmentsByStudent(user.id);
+      const attendance = await db.getAttendanceByStudent(user.id);
+      
+      const enrolledCourseIds = enrollments.map(e => e.course_id);
+      let totalSessions = 0;
+      for (const courseId of enrolledCourseIds) {
+        const sessions = await db.getSessionsByCourse(courseId);
+        totalSessions += sessions.length;
+      }
+      
+      const attendanceRate = totalSessions > 0 
+        ? (attendance.length / totalSessions) * 100 
+        : 0;
+      
+      overview = {
+        ...overview,
+        my_courses: enrollments.length,
+        my_attendance_records: attendance.length,
+        total_sessions: totalSessions,
+        my_attendance_rate: Math.round(attendanceRate)
+      };
+    }
+    
+    return c.json({ overview });
+  } catch (error) {
+    console.log('Get overview error:', error);
+    return c.json({ error: 'Internal server error while generating overview' }, 500);
+  }
+});
 
-// Public Stats
+// ==================== NOTIFICATIONS ====================
+
+app.get("/make-server-90ad488b/notifications", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const notifications = await db.getNotificationsByUser(user.id);
+    
+    return c.json({ notifications });
+  } catch (error) {
+    console.log('Get notifications error:', error);
+    return c.json({ error: 'Internal server error while fetching notifications' }, 500);
+  }
+});
+
+app.post("/make-server-90ad488b/notifications/:notificationId/read", async (c) => {
+  try {
+    const { error, user } = await getAuthenticatedUser(c.req.raw);
+    
+    if (error || !user) {
+      return c.json({ error: error || 'Unauthorized' }, 401);
+    }
+    
+    const notificationId = c.req.param('notificationId');
+    await db.markNotificationAsRead(notificationId);
+    
+    return c.json({ message: 'Notification marked as read' });
+  } catch (error) {
+    console.log('Mark notification as read error:', error);
+    return c.json({ error: 'Internal server error while marking notification as read' }, 500);
+  }
+});
+
+// ==================== PUBLIC STATS ENDPOINT ====================
+
+// Get public stats for landing page (no authentication required)
 app.get("/make-server-90ad488b/stats/public", async (c) => {
   try {
-    const supabase = getSupabaseClient();
+    console.log('📊 GET /stats/public - Fetching public statistics');
     
-    const { count: studentsCount } = await supabase
-      .from('profiles')
-      .select('*', { count: 'exact', head: true })
-      .eq('role', 'student');
+    const stats = await db.getPublicStats();
     
-    const { count: instructorsCount } = await supabase
-      .from('profiles')
-      .select('*', { count: 'exact', head: true })
-      .eq('role', 'instructor');
+    console.log('✅ Public stats retrieved:', stats);
     
-    const { count: coursesCount } = await supabase
-      .from('courses')
-      .select('*', { count: 'exact', head: true });
-    
-    const { data: attendanceData } = await supabase
-      .from('attendance')
-      .select('status');
-    
-    let attendanceRate = 99.8;
-    if (attendanceData && attendanceData.length > 0) {
-      const presentCount = attendanceData.filter(a => a.status === 'present').length;
-      attendanceRate = (presentCount / attendanceData.length) * 100;
-    }
-    
-    return c.json({
-      stats: {
-        studentsCount: studentsCount || 0,
-        instructorsCount: instructorsCount || 0,
-        coursesCount: coursesCount || 0,
-        attendanceRate: Number(attendanceRate.toFixed(1))
-      }
+    return c.json({ 
+      success: true,
+      stats 
     });
-  } catch (error: any) {
-    console.log('❌ Stats error:', error);
-    return c.json({
+  } catch (error) {
+    console.log('❌ Get public stats error:', error);
+    return c.json({ 
+      success: false,
+      error: 'Internal server error while fetching public stats',
       stats: {
         studentsCount: 0,
         instructorsCount: 0,
         coursesCount: 0,
-        attendanceRate: 99.8
+        attendanceRate: 0
       }
-    });
+    }, 500);
   }
 });
 
-// Dashboard Stats
-app.get("/make-server-90ad488b/stats/dashboard", async (c) => {
-  try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
-    }
-    
-    const supabase = getSupabaseClient();
-    
-    const { count: totalUsers } = await supabase
-      .from('profiles')
-      .select('*', { count: 'exact', head: true });
-    
-    const { count: totalCourses } = await supabase
-      .from('courses')
-      .select('*', { count: 'exact', head: true });
-    
-    const { count: totalSessions } = await supabase
-      .from('sessions')
-      .select('*', { count: 'exact', head: true });
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    
-    const { count: activeSessionsToday } = await supabase
-      .from('sessions')
-      .select('*', { count: 'exact', head: true })
-      .eq('active', true)
-      .gte('created_at', today.toISOString())
-      .lt('created_at', tomorrow.toISOString());
-    
-    return c.json({
-      totalUsers: totalUsers || 0,
-      totalCourses: totalCourses || 0,
-      totalSessions: totalSessions || 0,
-      activeSessionsToday: activeSessionsToday || 0
-    });
-  } catch (error: any) {
-    console.log('❌ Dashboard stats error:', error);
-    return c.json({
-      totalUsers: 0,
-      totalCourses: 0,
-      totalSessions: 0,
-      activeSessionsToday: 0
-    });
-  }
-});
-
-// =====================================================
-// 10. NOTIFICATIONS
-// =====================================================
-
-// Get Notifications
-app.get("/make-server-90ad488b/notifications", async (c) => {
-  try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
-    }
-    
-    const supabase = getSupabaseClient();
-    
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    
-    if (error) {
-      console.log('❌ Error fetching notifications:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    return c.json({ notifications: data || [] });
-  } catch (error: any) {
-    console.log('❌ Get notifications error:', error);
-    return c.json({ error: error.message }, 500);
-  }
-});
-
-// Mark Notification as Read
-app.put("/make-server-90ad488b/notifications/:id/read", async (c) => {
-  try {
-    const { error: authError, user } = await getAuthenticatedUser(c.req.raw);
-    
-    if (authError || !user) {
-      return c.json({ error: authError || 'Unauthorized' }, 401);
-    }
-    
-    const notificationId = c.req.param('id');
-    const supabase = getSupabaseClient();
-    
-    const { data, error } = await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('id', notificationId)
-      .eq('user_id', user.id)
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('❌ Error updating notification:', error);
-      return c.json({ error: error.message }, 500);
-    }
-    
-    return c.json({ notification: data });
-  } catch (error: any) {
-    console.log('❌ Update notification error:', error);
-    return c.json({ error: error.message }, 500);
-  }
-});
-
-// =====================================================
-// Start Server
-// =====================================================
-
-console.log('🚀 Starting Edge Function Server...');
-console.log('📍 All routes start with: /make-server-90ad488b');
-console.log('✅ Server ready!');
-
+// Start server
 Deno.serve(app.fetch);

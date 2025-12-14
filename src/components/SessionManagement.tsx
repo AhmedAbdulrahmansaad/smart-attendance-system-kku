@@ -42,16 +42,17 @@ interface Session {
   id: string;
   course_id: string;
   code: string;
-  created_by: string;
+  created_by?: string;
   created_at: string;
-  expires_at: string;
-  active: boolean;
+  session_date?: string;
+  start_time?: string;
   session_type?: 'attendance' | 'live';
   title?: string;
   description?: string;
   stream_active?: boolean;
   meeting_url?: string;
   attendance_code?: string;
+  location?: string;
 }
 
 interface Course {
@@ -98,6 +99,18 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
       setLoading(false);
     }
   }, [courses]);
+
+  // Auto-reload sessions every 30 seconds to update time remaining
+  useEffect(() => {
+    if (!token || sessions.length === 0) return;
+
+    const interval = setInterval(() => {
+      // Just re-render by forcing a state update
+      setSessions([...sessions]);
+    }, 30000); // Update every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [token, sessions]);
 
   const loadCourses = async () => {
     console.log('🔄 [SessionManagement] Loading courses...');
@@ -182,24 +195,29 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
 
       console.log('➕ [SessionManagement] Creating session...');
 
-      const durationMinutes = parseInt(newSessionDuration);
+      const durationMinutes = parseInt(newSessionDuration) || 3; // Default 3 minutes
+      
+      const now = new Date();
 
       // استخدام createSession مع fallback تلقائي
       const newSession = await createSession({
         course_id: newSessionCourse,
-        session_date: new Date().toISOString().split('T')[0],
-        session_time: new Date().toTimeString().split(' ')[0],
+        instructor_id: user?.id, // إضافة معرف المدرس
+        session_date: now.toISOString().split('T')[0], // YYYY-MM-DD
+        session_time: now.toISOString(), // Full ISO timestamp
         duration: durationMinutes,
         session_type: newSessionType,
         session_code: undefined, // سيتم توليده تلقائياً
       }, token);
 
       console.log('✅ [SessionManagement] Session created successfully:', newSession);
-      toast.success('تم إنشاء الجلسة بنجاح / Session created successfully');
+      toast.success('تم إنشاء الجلسة بنجاح / Session created successfully', {
+        description: `الكود: ${newSession.code} | سينتهي بعد ${durationMinutes} دقيقة`
+      });
 
       setIsDialogOpen(false);
       setNewSessionCourse('');
-      setNewSessionDuration('15');
+      setNewSessionDuration('3'); // Default to 3 minutes
       setNewSessionType('attendance');
       setNewSessionTitle('');
       setNewSessionDescription('');
@@ -215,18 +233,18 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
   };
 
   const handleDeactivateSession = async (sessionId: string) => {
-    if (!confirm('هل أنت متأكد من إيقاف هذه الجلسة؟')) {
+    if (!confirm('هل أنت متأكد من إيقاف هذه الجلسة؟ سيتم حذفها نهائياً.')) {
       return;
     }
 
     try {
       if (!token) return;
 
-      console.log('⏸️ [SessionManagement] Deactivating session...');
+      console.log('🗑️ [SessionManagement] Deleting session...');
 
       const { error } = await supabase
         .from('sessions')
-        .update({ active: false })
+        .delete()
         .eq('id', sessionId);
 
       if (error) {
@@ -234,14 +252,14 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
         throw error;
       }
 
-      console.log('✅ [SessionManagement] Session deactivated successfully');
-      toast.success('تم إيقاف الجلسة بنجاح / Session deactivated successfully');
+      console.log('✅ [SessionManagement] Session deleted successfully');
+      toast.success('تم حذف الجلسة بنجاح / Session deleted successfully');
 
       await loadAllSessions();
     } catch (error: any) {
-      console.error('❌ [SessionManagement] Error deactivating session:', error);
-      toast.error('فشل إيقاف الجلسة / Failed to deactivate session');
-      setError('فشل إيقاف الجلسة');
+      console.error('❌ [SessionManagement] Error deleting session:', error);
+      toast.error('فشل حذف الجلسة / Failed to delete session');
+      setError('فشل حذف الجلسة');
     }
   };
 
@@ -380,24 +398,27 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     return course ? `${course.course_name} (${course.course_code})` : 'مادة غير معروفة';
   };
 
-  const isSessionExpired = (expiresAt: string) => {
-    return new Date(expiresAt) < new Date();
+  const isSessionExpired = (created_at: string) => {
+    // Simple: sessions older than 1 hour are considered expired
+    const createdTime = new Date(created_at);
+    const now = new Date();
+    const hoursPassed = (now.getTime() - createdTime.getTime()) / (1000 * 60 * 60);
+    return hoursPassed > 1; // Consider sessions expired after 1 hour
   };
 
-  const getTimeRemaining = (expiresAt: string) => {
+  const getTimeRemaining = (created_at: string) => {
+    // Simple: calculate time since creation
+    const createdTime = new Date(created_at);
     const now = new Date();
-    const expires = new Date(expiresAt);
-    const diff = expires.getTime() - now.getTime();
-
-    if (diff <= 0) return 'انتهت';
-
-    const minutes = Math.floor(diff / 60000);
-    const seconds = Math.floor((diff % 60000) / 1000);
-
-    if (minutes > 0) {
-      return `${minutes} دقيقة ${seconds} ثانية`;
+    const minutesPassed = Math.floor((now.getTime() - createdTime.getTime()) / 60000);
+    
+    if (minutesPassed > 60) return 'انتهت';
+    
+    const minutesRemaining = 60 - minutesPassed;
+    if (minutesRemaining > 0) {
+      return `${minutesRemaining} دقيقة`;
     }
-    return `${seconds} ثانية`;
+    return 'انتهت';
   };
 
   if (loading) {
@@ -405,14 +426,14 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">جارٍ التحميل...</p>
+          <p className="mt-4 text-muted-foreground">جارٍ التحيل...</p>
         </div>
       </div>
     );
   }
 
-  const activeSessions = sessions.filter((s) => s.active && !isSessionExpired(s.expires_at));
-  const inactiveSessions = sessions.filter((s) => !s.active || isSessionExpired(s.expires_at));
+  const activeSessions = sessions.filter((s) => !isSessionExpired(s.created_at));
+  const inactiveSessions = sessions.filter((s) => isSessionExpired(s.created_at));
 
   // If no courses exist, show guidance
   if (courses.length === 0 && !loading) {
@@ -631,7 +652,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
                   </CardTitle>
                   <CardDescription className="flex items-center gap-2">
                     <Timer className="w-4 h-4" />
-                    الوقت المتبقي: {getTimeRemaining(session.expires_at)}
+                    الوقت المتبقي: {getTimeRemaining(session.created_at)}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -739,7 +760,7 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-full text-xs">
-                      {isSessionExpired(session.expires_at) ? 'منتهية' : 'متوقفة'}
+                      {isSessionExpired(session.created_at) ? 'منتهية' : 'متوقفة'}
                     </span>
                     {session.session_type === 'live' && (
                       <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs flex items-center gap-1">

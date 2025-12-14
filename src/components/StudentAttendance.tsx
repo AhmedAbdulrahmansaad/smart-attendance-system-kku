@@ -73,7 +73,7 @@ export function StudentAttendance() {
       // Step 1: Find the session by code
       const { data: session, error: sessionError } = await supabase
         .from('sessions')
-        .select('id, course_id, active, expires_at')
+        .select('id, course_id')
         .eq('code', code)
         .single();
 
@@ -84,23 +84,8 @@ export function StudentAttendance() {
         return;
       }
 
-      // Step 2: Check if session is active
-      if (!session.active) {
-        console.error('❌ [StudentAttendance] Session is not active');
-        setError(language === 'ar' ? 'الجلسة غير نشطة' : 'Session is not active');
-        setLoading(false);
-        return;
-      }
-
-      // Step 3: Check if session has expired
-      const now = new Date();
-      const expiresAt = new Date(session.expires_at);
-      if (now > expiresAt) {
-        console.error('❌ [StudentAttendance] Session has expired');
-        setError(language === 'ar' ? 'انتهت صلاحية الجلسة' : 'Session has expired');
-        setLoading(false);
-        return;
-      }
+      // Note: We removed active and expires_at checks as these columns don't exist
+      // Sessions are valid as long as they exist in the database
 
       // Step 4: Check if student is enrolled in this course
       const { data: enrollment, error: enrollmentError } = await supabase
@@ -198,7 +183,7 @@ export function StudentAttendance() {
         return;
       }
       
-      if (!session?.access_token) {
+      if (!session?.access_token || !user) {
         console.error('❌ [Student] No valid session');
         setLiveSessions([]);
         setCourses([]);
@@ -206,46 +191,81 @@ export function StudentAttendance() {
         return;
       }
 
-      const freshToken = session.access_token;
-      console.log('✅ [Student] Using fresh token to fetch sessions');
+      console.log('✅ [Student] Fetching live sessions for user:', user.id);
 
-      // Fetch live sessions from API
-      const response = await getSessions(freshToken);
+      // Get enrolled courses
+      const { data: enrollments, error: enrollError } = await supabase
+        .from('enrollments')
+        .select('course_id')
+        .eq('student_id', user.id);
 
-      console.log('📦 [Student] API Response:', response);
+      if (enrollError) {
+        console.error('❌ [Student] Error fetching enrollments:', enrollError);
+      }
 
-      const { sessions = [], courses: userCourses = [] } = response.data || {};
+      const enrolledCourseIds = enrollments?.map(e => e.course_id) || [];
+      console.log('📚 [Student] Enrolled in courses:', enrolledCourseIds);
 
-      console.log('🎥 [Student] Active live sessions:', sessions.length);
-      console.log('📚 [Student] User courses:', userCourses.length);
+      // Get courses details
+      const { data: coursesData, error: coursesError } = await supabase
+        .from('courses')
+        .select('*')
+        .in('id', enrolledCourseIds);
 
-      setLiveSessions(sessions);
-      setCourses(userCourses);
+      if (coursesError) {
+        console.error('❌ [Student] Error fetching courses:', coursesError);
+      }
+
+      setCourses(coursesData || []);
+
+      if (enrolledCourseIds.length === 0) {
+        console.warn('⚠️ [Student] Not enrolled in any courses');
+        setLiveSessions([]);
+        setLoadingSessions(false);
+        return;
+      }
+
+      // Get active live sessions for enrolled courses with JOIN
+      const { data: sessionsData, error: sessionsError } = await supabase
+        .from('sessions')
+        .select(`
+          *,
+          course:courses (
+            id,
+            course_name,
+            course_code,
+            instructor_id
+          ),
+          instructor:profiles!sessions_instructor_id_fkey (
+            id,
+            full_name
+          )
+        `)
+        .in('course_id', enrolledCourseIds)
+        .eq('session_type', 'live')
+        .eq('stream_active', true)
+        .order('created_at', { ascending: false });
+
+      if (sessionsError) {
+        console.error('❌ [Student] Error fetching sessions:', sessionsError);
+        setLiveSessions([]);
+        setLoadingSessions(false);
+        return;
+      }
+
+      // Format sessions data
+      const formattedSessions = (sessionsData || []).map((session: any) => ({
+        ...session,
+        course_name: session.course?.course_name,
+        course_code: session.course?.course_code,
+        instructor_name: session.instructor?.full_name,
+      }));
+
+      console.log('🎥 [Student] Active live sessions:', formattedSessions.length);
+      setLiveSessions(formattedSessions);
 
     } catch (err: any) {
       console.error('❌ [Student] Error:', err);
-      console.error('❌ [Student] Error message:', err.message);
-      
-      // If 401 error, try to refresh the session
-      if (err.message?.includes('401') || err.message?.includes('Unauthorized') || err.message?.includes('Invalid JWT')) {
-        console.log('🔄 [Student] Token expired, refreshing...');
-        try {
-          const { data, error } = await supabase.auth.refreshSession();
-          if (!error && data.session) {
-            console.log('✅ [Student] Session refreshed, retrying...');
-            // Retry once with new token
-            const response = await getSessions(data.session.access_token);
-            const { sessions = [], courses: userCourses = [] } = response.data || {};
-            setLiveSessions(sessions);
-            setCourses(userCourses);
-            setLoadingSessions(false);
-            return;
-          }
-        } catch (refreshError) {
-          console.error('❌ [Student] Refresh failed:', refreshError);
-        }
-      }
-      
       setLiveSessions([]);
       setCourses([]);
     } finally {
@@ -590,6 +610,9 @@ export function StudentAttendance() {
             <LiveStreamViewer
               sessionId={activeStreamSession.id}
               sessionTitle={activeStreamSession.title || (language === 'ar' ? 'جلسة مباشرة' : 'Live Session')}
+              meetingUrl={activeStreamSession.meeting_url || ''}
+              courseName={activeStreamSession.course_name || (language === 'ar' ? 'غير محدد' : 'Unknown')}
+              instructorName={activeStreamSession.instructor_name || (language === 'ar' ? 'غير محدد' : 'Unknown')}
               onLeave={() => setActiveStreamSession(null)}
             />
           </div>
