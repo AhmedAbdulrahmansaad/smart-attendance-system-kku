@@ -495,6 +495,26 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
     return 'انتهت';
   };
 
+  // NEW: Check if attendance code should be hidden (after 15 minutes)
+  const shouldHideAttendanceCode = (created_at: string) => {
+    const createdTime = new Date(created_at);
+    const now = new Date();
+    const minutesPassed = Math.floor((now.getTime() - createdTime.getTime()) / 60000);
+    return minutesPassed >= 15; // Hide after 15 minutes
+  };
+
+  // NEW: Get attendance code visibility time remaining
+  const getCodeVisibilityTimeRemaining = (created_at: string) => {
+    const createdTime = new Date(created_at);
+    const now = new Date();
+    const minutesPassed = Math.floor((now.getTime() - createdTime.getTime()) / 60000);
+    const minutesRemaining = 15 - minutesPassed;
+    
+    if (minutesRemaining <= 0) return 'انتهى';
+    if (minutesRemaining === 1) return 'دقيقة واحدة';
+    return `${minutesRemaining} دقيقة`;
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -739,12 +759,27 @@ export function SessionManagement({ onNavigate }: SessionManagementProps = {}) {
                     </div>
                   )}
 
-                  <div className="bg-primary/5 p-4 rounded-lg text-center">
-                    <p className="text-sm text-muted-foreground mb-2">كود الحضور</p>
-                    <p className="text-3xl font-bold tracking-wider text-primary">
-                      {session.code}
-                    </p>
-                  </div>
+                  {/* Attendance Code - Hide after 15 minutes */}
+                  {!shouldHideAttendanceCode(session.created_at) ? (
+                    <div className="bg-primary/5 p-4 rounded-lg text-center">
+                      <p className="text-sm text-muted-foreground mb-2">
+                        كود الحضور - يختفي بعد: {getCodeVisibilityTimeRemaining(session.created_at)}
+                      </p>
+                      <p className="text-3xl font-bold tracking-wider text-primary">
+                        {session.code}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-destructive/10 p-4 rounded-lg text-center border border-destructive/20">
+                      <p className="text-sm text-destructive mb-2 flex items-center justify-center gap-2">
+                        <AlertCircle className="w-4 h-4" />
+                        انتهت صلاحية كود الحضور
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        مرت 15 دقيقة على بدء الجلسة. الكود غير متاح للعرض.
+                      </p>
+                    </div>
+                  )}
 
                   {session.session_type === 'live' && (
                     <Button

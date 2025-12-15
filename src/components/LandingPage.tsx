@@ -26,6 +26,7 @@ import { motion } from 'motion/react';
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest } from '../utils/api';
 import { projectId, publicAnonKey } from '../utils/supabase/info';
+import { supabase } from '../utils/supabaseClient';
 
 interface LandingPageProps {
   onNavigate: (page: 'login' | 'team' | 'health-check' | 'api-test' | 'connection-test') => void;
@@ -41,50 +42,65 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
     queryKey: ['landing-stats'],
     queryFn: async () => {
       try {
-        console.log('🔍 Fetching landing stats from API...');
-        console.log('📍 URL:', `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/stats/public`);
+        console.log('🔍 Fetching landing stats from Supabase...');
         
-        // Call the public stats API endpoint
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/stats/public`,
-          {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${publicAnonKey}`,
-            },
-          }
-        );
+        // جلب عدد الطلاب النشطين
+        const { count: studentsCount, error: studentsError } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .eq('role', 'student');
         
-        console.log('📡 Response status:', response.status);
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('❌ API Error Response:', errorText);
-          console.warn('⚠️ Edge Functions might not be deployed yet. Using fallback data.');
-          // Return fallback data instead of throwing
-          return {
-            studentsCount: 0,
-            instructorsCount: 0,
-            coursesCount: 0,
-            attendanceRate: 99.8
-          };
+        if (studentsError) {
+          console.error('❌ Error fetching students:', studentsError);
         }
         
-        const data = await response.json();
+        // جلب عدد المدرسين النشطين
+        const { count: instructorsCount, error: instructorsError } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .eq('role', 'instructor');
         
-        console.log('✅ Landing page stats from database:', data);
+        if (instructorsError) {
+          console.error('❌ Error fetching instructors:', instructorsError);
+        }
+        
+        // جلب عدد المقررات
+        const { count: coursesCount, error: coursesError } = await supabase
+          .from('courses')
+          .select('*', { count: 'exact', head: true });
+        
+        if (coursesError) {
+          console.error('❌ Error fetching courses:', coursesError);
+        }
+        
+        // جلب معدل الحضور (الجلسات الناجحة)
+        const { count: totalSessions } = await supabase
+          .from('sessions')
+          .select('*', { count: 'exact', head: true });
+        
+        const { count: attendedSessions } = await supabase
+          .from('attendance')
+          .select('*', { count: 'exact', head: true });
+        
+        const attendanceRate = totalSessions && totalSessions > 0
+          ? ((attendedSessions || 0) / totalSessions * 100).toFixed(1)
+          : '99.8';
+        
+        console.log('✅ Landing page stats from Supabase:', {
+          studentsCount,
+          instructorsCount,
+          coursesCount,
+          attendanceRate
+        });
         
         return {
-          studentsCount: data.stats?.studentsCount || 0,
-          instructorsCount: data.stats?.instructorsCount || 0,
-          coursesCount: data.stats?.coursesCount || 0,
-          attendanceRate: data.stats?.attendanceRate || 99.8
+          studentsCount: studentsCount || 0,
+          instructorsCount: instructorsCount || 0,
+          coursesCount: coursesCount || 0,
+          attendanceRate: parseFloat(attendanceRate)
         };
       } catch (error) {
         console.error('❌ Error loading landing stats:', error);
-        console.warn('⚠️ Using fallback stats. Please deploy Edge Functions to see real data.');
-        console.warn('📝 Run: supabase functions deploy server');
         // Return fallback data silently
         return {
           studentsCount: 0,
@@ -95,7 +111,8 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
       }
     },
     enabled: true,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 30 * 1000, // 30 seconds - refresh more frequently
+    refetchInterval: 60 * 1000, // Refetch every minute
     retry: false, // Don't retry on failure
   });
 
@@ -108,7 +125,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
       icon: Fingerprint,
       titleAr: 'التعرف على بصمة الجهاز',
       titleEn: 'Device Fingerprint',
-      descAr: 'تقنية متقدمة للتعرف على بصمة الجهاز الفريدة لضمان الأمان',
+      descAr: 'تقنية متقدمة ل��تعرف على بصمة الجهاز الفريدة لضمان الأمان',
       descEn: 'Advanced device fingerprint technology for enhanced security',
       color: 'from-emerald-500 via-green-500 to-teal-500'
     },

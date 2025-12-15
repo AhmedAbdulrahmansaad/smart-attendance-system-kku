@@ -342,6 +342,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      // Check if user already exists (in auth or profiles)
+      console.log('🔍 [AuthContext] Checking if user already exists...');
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, email')
+        .eq('email', email)
+        .maybeSingle();
+      
+      if (existingProfile) {
+        throw new Error('هذا البريد مسجل مسبقاً. الرجاء استخدام تسجيل الدخول.\nEmail already registered. Please use Sign In.');
+      }
+
       // Use Edge Function /signup endpoint with Fallback
       console.log('🌐 [AuthContext] Calling /signup endpoint...');
       
