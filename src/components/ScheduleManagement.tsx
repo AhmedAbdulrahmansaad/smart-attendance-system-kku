@@ -13,9 +13,9 @@ import {
 } from './ui/dialog';
 import { Alert, AlertDescription } from './ui/alert';
 import { Calendar, Plus, Trash2, AlertCircle, Clock } from 'lucide-react';
-import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthContext';
 import { toast } from 'sonner';
+import { projectId, publicAnonKey } from '../utils/supabase/info';
 
 interface Schedule {
   id: string;
@@ -53,13 +53,13 @@ export function ScheduleManagement() {
   const [newScheduleLocation, setNewScheduleLocation] = useState('');
 
   const daysOfWeek = [
-    { value: 'sunday', label: 'الأحد' },
-    { value: 'monday', label: 'الاثنين' },
-    { value: 'tuesday', label: 'الثلاثاء' },
-    { value: 'wednesday', label: 'الأربعاء' },
-    { value: 'thursday', label: 'الخميس' },
-    { value: 'friday', label: 'الجمعة' },
-    { value: 'saturday', label: 'السبت' },
+    { value: 'SUNDAY', label: 'الأحد' },
+    { value: 'MONDAY', label: 'الاثنين' },
+    { value: 'TUESDAY', label: 'الثلاثاء' },
+    { value: 'WEDNESDAY', label: 'الأربعاء' },
+    { value: 'THURSDAY', label: 'الخميس' },
+    { value: 'FRIDAY', label: 'الجمعة' },
+    { value: 'SATURDAY', label: 'السبت' },
   ];
 
   useEffect(() => {
@@ -73,43 +73,27 @@ export function ScheduleManagement() {
     if (!token) return;
     
     try {
-      console.log('📅 [ScheduleManagement] Loading schedules from Supabase...');
+      console.log('📅 [ScheduleManagement] Loading schedules from backend...');
       
-      // Load schedules
-      const { data: schedulesData, error: schedulesError } = await supabase
-        .from('schedules')
-        .select('*')
-        .order('day_of_week', { ascending: true });
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/schedules`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
 
-      if (schedulesError) {
-        console.error('❌ [ScheduleManagement] Error:', schedulesError);
-        throw schedulesError;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to load schedules');
       }
 
-      // Load courses separately
-      const { data: coursesData, error: coursesError } = await supabase
-        .from('courses')
-        .select('id, course_name, course_code');
+      const { schedules: schedulesData } = await response.json();
 
-      if (coursesError) {
-        console.error('❌ [ScheduleManagement] Courses error:', coursesError);
-        // Continue without courses
-      }
-
-      // Manually join schedules with courses
-      const schedulesWithCourses = (schedulesData || []).map(schedule => {
-        const course = coursesData?.find(c => c.id === schedule.course_id);
-        return {
-          ...schedule,
-          course: course ? {
-            course_name: course.course_name,
-            course_code: course.course_code
-          } : undefined
-        };
-      });
-
-      console.log('✅ [ScheduleManagement] Loaded', schedulesWithCourses.length, 'schedules');
-      setSchedules(schedulesWithCourses);
+      console.log('✅ [ScheduleManagement] Loaded', schedulesData?.length || 0, 'schedules');
+      setSchedules(schedulesData || []);
     } catch (error: any) {
       console.error('❌ [ScheduleManagement] Error loading schedules:', error);
       toast.error('فشل تحميل الجداول / Failed to load schedules');
@@ -123,20 +107,27 @@ export function ScheduleManagement() {
     if (!token) return;
     
     try {
-      console.log('📚 [ScheduleManagement] Loading courses from Supabase...');
+      console.log('📚 [ScheduleManagement] Loading courses from backend...');
       
-      const { data, error } = await supabase
-        .from('courses')
-        .select('*')
-        .order('course_name', { ascending: true });
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/courses`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
 
-      if (error) {
-        console.error('❌ [ScheduleManagement] Error:', error);
-        throw error;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to load courses');
       }
 
-      console.log('✅ [ScheduleManagement] Loaded', data?.length, 'courses');
-      setCourses(data || []);
+      const { courses: coursesData } = await response.json();
+
+      console.log('✅ [ScheduleManagement] Loaded', coursesData?.length || 0, 'courses');
+      setCourses(coursesData || []);
     } catch (error: any) {
       console.error('❌ [ScheduleManagement] Error loading courses:', error);
       toast.error('فشل تحميل المقررات / Failed to load courses');
@@ -153,23 +144,29 @@ export function ScheduleManagement() {
     }
 
     try {
-      console.log('➕ [ScheduleManagement] Adding new schedule to Supabase...');
+      console.log('➕ [ScheduleManagement] Adding new schedule via backend...');
       
-      const { data, error } = await supabase
-        .from('schedules')
-        .insert({
-          course_id: newScheduleCourse,
-          day_of_week: newScheduleDay,
-          start_time: newScheduleStartTime,
-          end_time: newScheduleEndTime,
-          location: newScheduleLocation || null,
-        })
-        .select()
-        .single();
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/schedules`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            course_id: newScheduleCourse,
+            day_of_week: newScheduleDay,
+            start_time: newScheduleStartTime,
+            end_time: newScheduleEndTime,
+            location: newScheduleLocation || null,
+          }),
+        }
+      );
 
-      if (error) {
-        console.error('❌ [ScheduleManagement] Error:', error);
-        throw error;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to add schedule');
       }
 
       console.log('✅ [ScheduleManagement] Schedule added successfully');
@@ -198,16 +195,22 @@ export function ScheduleManagement() {
     }
 
     try {
-      console.log('🗑️ [ScheduleManagement] Deleting schedule from Supabase...');
+      console.log('🗑️ [ScheduleManagement] Deleting schedule via backend...');
       
-      const { error } = await supabase
-        .from('schedules')
-        .delete()
-        .eq('id', scheduleId);
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/schedules/${scheduleId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
 
-      if (error) {
-        console.error('❌ [ScheduleManagement] Error:', error);
-        throw error;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete schedule');
       }
 
       console.log('✅ [ScheduleManagement] Schedule deleted successfully');

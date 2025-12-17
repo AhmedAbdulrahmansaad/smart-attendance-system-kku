@@ -52,7 +52,7 @@ export async function apiRequest(
       
       // Handle 404 - Edge Function not deployed (silent)
       if (response.status === 404) {
-        console.error('❌ [API] 404 - Edge Function not found at:', url);
+        console.log('ℹ️ [API] Edge Function not deployed - using fallback');
         throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
       
@@ -62,7 +62,7 @@ export async function apiRequest(
       if (contentType && contentType.includes('application/json')) {
         data = await response.json();
       } else {
-        console.error('❌ [API] Non-JSON response from:', url);
+        console.log('ℹ️ [API] Non-JSON response - Edge Function not deployed');
         throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
       
@@ -78,7 +78,7 @@ export async function apiRequest(
       
       // Handle all network errors as "Edge Function not deployed"
       if (fetchError.name === 'AbortError') {
-        console.error('❌ [API] Timeout after 10s:', url);
+        console.log('ℹ️ [API] Request timeout - using fallback');
         throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
       
@@ -86,7 +86,7 @@ export async function apiRequest(
       if (fetchError.message.includes('Failed to fetch') || 
           fetchError.message.includes('fetch failed') ||
           fetchError.message.includes('NetworkError')) {
-        console.error('❌ [API] Network error (Failed to fetch):', url);
+        console.log('ℹ️ [API] Network error - Edge Function not deployed (normal)');
         throw new Error('EDGE_FUNCTION_NOT_DEPLOYED');
       }
       

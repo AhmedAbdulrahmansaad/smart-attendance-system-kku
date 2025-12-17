@@ -97,8 +97,7 @@ export async function checkEdgeFunction(): Promise<boolean> {
     edgeFunctionAvailable = true;
     return true;
   } catch (error: any) {
-    console.warn('⚠️ [Fallback] Edge Function not available - using direct Supabase');
-    console.warn('⚠️ [Fallback] Error:', error.message);
+    console.log('ℹ️ [Fallback] Edge Function not available - using direct Supabase (this is normal)');
     edgeFunctionAvailable = false;
     return false;
   }

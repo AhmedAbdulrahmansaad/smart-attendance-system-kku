@@ -167,7 +167,7 @@ export function CourseManagement() {
       );
 
       console.log('✅ [CourseManagement] Course added successfully');
-      toast.success('تم إضافة المادة بنج��ح / Course added successfully');
+      toast.success('تم إضافة المادة بنجح / Course added successfully');
 
       // Reset form
       setNewCourseName('');
@@ -224,6 +224,31 @@ export function CourseManagement() {
     try {
       console.log('📝 [CourseManagement] Enrolling student in course...');
       
+      // Check if student is already enrolled
+      const { data: existing, error: checkError } = await supabase
+        .from('enrollments')
+        .select('id')
+        .eq('student_id', selectedStudentId)
+        .eq('course_id', selectedCourseId)
+        .maybeSingle();
+      
+      if (existing) {
+        console.log('ℹ️ [CourseManagement] Student already enrolled');
+        const selectedStudent = students.find(s => s.id === selectedStudentId);
+        const selectedCourse = courses.find(c => c.id === selectedCourseId);
+        
+        toast.info(
+          language === 'ar' 
+            ? `الطالب ${selectedStudent?.full_name} مسجل بالفعل في ${selectedCourse?.course_name}`
+            : `Student ${selectedStudent?.full_name} is already enrolled in ${selectedCourse?.course_name}`
+        );
+        
+        setEnrollDialogOpen(false);
+        setSelectedStudentId('');
+        setSelectedCourseId('');
+        return;
+      }
+      
       const { data, error } = await supabase
         .from('enrollments')
         .insert({
@@ -234,6 +259,24 @@ export function CourseManagement() {
         .single();
 
       if (error) {
+        // Handle duplicate key error gracefully
+        if (error.code === '23505') {
+          console.log('ℹ️ [CourseManagement] Duplicate enrollment (race condition)');
+          const selectedStudent = students.find(s => s.id === selectedStudentId);
+          const selectedCourse = courses.find(c => c.id === selectedCourseId);
+          
+          toast.info(
+            language === 'ar' 
+              ? `الطالب ${selectedStudent?.full_name} مسجل بالفعل في ${selectedCourse?.course_name}`
+              : `Student ${selectedStudent?.full_name} is already enrolled in ${selectedCourse?.course_name}`
+          );
+          
+          setEnrollDialogOpen(false);
+          setSelectedStudentId('');
+          setSelectedCourseId('');
+          return;
+        }
+        
         console.error('❌ [CourseManagement] Error:', error);
         throw error;
       }

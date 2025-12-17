@@ -600,6 +600,8 @@ app.post("/make-server-90ad488b/schedules", async (c) => {
       return c.json({ error: 'Missing required fields' }, 400);
     }
     
+    console.log('📝 [POST /schedules] Creating schedule with data:', scheduleData);
+    
     const schedule = await db.createSchedule(scheduleData);
     
     // Log activity
@@ -612,9 +614,9 @@ app.post("/make-server-90ad488b/schedules", async (c) => {
     });
     
     return c.json({ message: 'Schedule created successfully', schedule });
-  } catch (error) {
-    console.log('Create schedule error:', error);
-    return c.json({ error: 'Internal server error while creating schedule' }, 500);
+  } catch (error: any) {
+    console.error('❌ [POST /schedules] Error:', error);
+    return c.json({ error: error?.message || 'Internal server error while creating schedule' }, 500);
   }
 });
 
