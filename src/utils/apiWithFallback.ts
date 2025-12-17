@@ -72,32 +72,42 @@ let edgeFunctionAvailable: boolean | null = null;
  * 
  * CRITICAL: User specified Edge Function exists at:
  * https://pcymgqdjbdklrikdquih.supabase.co/functions/v1/server
+ * All routes are prefixed with /make-server-90ad488b
  * 
  * If it's not deployed yet, we'll use direct Supabase fallback.
  */
 export async function checkEdgeFunction(): Promise<boolean> {
   // If we already checked and it's not available, don't check again
   if (edgeFunctionAvailable === false) {
+    console.log('ℹ️ [Fallback] Previously determined Edge Function unavailable - using Supabase');
     return false;
   }
 
   // Only check once on first request
   if (edgeFunctionAvailable !== null) {
+    console.log('✅ [Fallback] Edge Function available (cached) - using Backend API');
     return edgeFunctionAvailable;
   }
 
+  console.log('🔍 [Fallback] Checking Edge Function availability...');
+  console.log('🔍 [Fallback] Expected URL: https://pcymgqdjbdklrikdquih.supabase.co/functions/v1/server/make-server-90ad488b/health');
+  
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
     
-    await apiRequest('/health', { method: 'GET' });
+    const result = await apiRequest('/health', { method: 'GET' });
     clearTimeout(timeoutId);
     
     console.log('✅ [Fallback] Edge Function is available - using Backend API');
+    console.log('✅ [Fallback] Health check response:', result);
     edgeFunctionAvailable = true;
     return true;
   } catch (error: any) {
-    console.log('ℹ️ [Fallback] Edge Function not available - using direct Supabase (this is normal)');
+    console.log('⚠️ [Fallback] Edge Function check failed - using direct Supabase');
+    console.log('   Error type:', error.message);
+    console.log('   This is normal if Edge Function is not deployed yet');
+    console.log('   All operations will use direct Supabase instead');
     edgeFunctionAvailable = false;
     return false;
   }
@@ -233,17 +243,20 @@ export async function createCourse(
 
   if (useBackend) {
     try {
+      console.log('🔄 [createCourse] Attempting backend API...');
       const data = await apiRequest('/courses', {
         method: 'POST',
         body: courseData,
         token,
       });
+      console.log('✅ [createCourse] Backend API success');
       return data.course;
     } catch (error: any) {
       if (error.message === 'EDGE_FUNCTION_NOT_DEPLOYED') {
         console.warn('⚠️ [createCourse] Fallback to direct Supabase');
         edgeFunctionAvailable = false;
       } else {
+        console.error('❌ [createCourse] Backend API error:', error);
         throw error;
       }
     }
@@ -252,20 +265,30 @@ export async function createCourse(
   // Fallback to direct Supabase
   console.log('🔄 [createCourse] Using direct Supabase');
   
-  const { data, error } = await supabase
-    .from('courses')
-    .insert({
-      ...courseData,
-    })
-    .select()
-    .single();
+  try {
+    const { data, error } = await supabase
+      .from('courses')
+      .insert({
+        ...courseData,
+      })
+      .select()
+      .single();
 
-  if (error) {
-    console.error('❌ [createCourse] Supabase error:', error);
-    throw new Error(error.message);
+    if (error) {
+      console.error('❌ [createCourse] Supabase error:', {
+        message: error.message,
+        hint: error.hint,
+        code: error.code,
+      });
+      throw new Error(error.message);
+    }
+
+    console.log('✅ [createCourse] Created successfully via Supabase:', data.id);
+    return data;
+  } catch (error: any) {
+    console.error('❌ [createCourse] Fatal error:', error);
+    throw error;
   }
-
-  return data;
 }
 
 /**

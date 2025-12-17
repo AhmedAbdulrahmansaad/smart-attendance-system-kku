@@ -23,10 +23,16 @@ app.use(
 
 // Helper to get authenticated user
 async function getAuthenticatedUser(request: Request) {
-  const accessToken = request.headers.get('Authorization')?.split(' ')[1];
+  const authHeader = request.headers.get('Authorization');
+  console.log('🔐 [getAuthenticatedUser] Auth header:', authHeader ? 'Present' : 'Missing');
+  
+  const accessToken = authHeader?.split(' ')[1];
   if (!accessToken) {
+    console.log('❌ [getAuthenticatedUser] No access token found');
     return { error: 'Missing authorization token', user: null };
   }
+  
+  console.log('🔑 [getAuthenticatedUser] Access token:', accessToken.substring(0, 20) + '...');
   
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -35,8 +41,11 @@ async function getAuthenticatedUser(request: Request) {
   
   const { data, error } = await supabase.auth.getUser(accessToken);
   if (error || !data.user) {
+    console.log('❌ [getAuthenticatedUser] Supabase auth error:', error?.message || 'No user data');
     return { error: 'Unauthorized', user: null };
   }
+  
+  console.log('✅ [getAuthenticatedUser] Supabase auth success, user:', data.user.id);
   
   // Get user from database
   let userRecord = await db.getUserByAuthId(data.user.id);
@@ -47,20 +56,47 @@ async function getAuthenticatedUser(request: Request) {
     
     const metadata = data.user.user_metadata || {};
     try {
-      userRecord = await db.createUser({
-        auth_id: data.user.id,
-        email: data.user.email || '',
-        full_name: metadata.full_name || metadata.name || 'User',
-        role: metadata.role || 'student',
-        university_id: metadata.university_id || undefined,
-      });
-      console.log('✅ [getAuthenticatedUser] User created in DB:', userRecord.email);
-    } catch (err) {
+      // Double check if user was just created (race condition)
+      userRecord = await db.getUserByAuthId(data.user.id);
+      
+      if (userRecord) {
+        console.log('✅ [getAuthenticatedUser] User already exists (race condition avoided):', userRecord.email);
+      } else {
+        userRecord = await db.createUser({
+          auth_id: data.user.id,
+          email: data.user.email || '',
+          full_name: metadata.full_name || metadata.name || 'User',
+          role: metadata.role || 'student',
+          university_id: metadata.university_id || undefined,
+        });
+        console.log('✅ [getAuthenticatedUser] User created in DB:', userRecord.email);
+      }
+    } catch (err: any) {
       console.error('❌ Error creating user:', err);
-      return { error: 'Error creating user', user: null };
+      
+      // If it's a duplicate key error, try to get the user again
+      if (err.code === '23505' || err.message?.includes('duplicate key')) {
+        console.log('🔄 [getAuthenticatedUser] Duplicate key error, fetching existing user...');
+        userRecord = await db.getUserByAuthId(data.user.id);
+        
+        if (userRecord) {
+          console.log('✅ [getAuthenticatedUser] Found existing user after duplicate key error:', userRecord.email);
+        } else {
+          console.error('❌ [getAuthenticatedUser] Still cannot find user after duplicate error!');
+          return { error: 'Error creating user', user: null };
+        }
+      } else {
+        return { error: 'Error creating user', user: null };
+      }
     }
   }
   
+  if (!userRecord) {
+    console.error('❌ [getAuthenticatedUser] User record is still null!');
+    return { error: 'User record not found', user: null };
+  }
+  
+  console.log('✅ [getAuthenticatedUser] User record loaded:', userRecord.email, 'role:', userRecord.role);
   return { error: null, user: userRecord };
 }
 
@@ -625,27 +661,71 @@ app.get("/make-server-90ad488b/schedules", async (c) => {
     const { error, user } = await getAuthenticatedUser(c.req.raw);
     
     if (error || !user) {
+      console.log('❌ [GET /schedules] Unauthorized:', error);
       return c.json({ error: error || 'Unauthorized' }, 401);
     }
     
+    console.log('📅 [GET /schedules] Fetching schedules for user:', user.email, 'ID:', user.id, 'role:', user.role);
+    
     const schedules = await db.getAllSchedules();
+    console.log('📊 [GET /schedules] Total schedules in database:', schedules.length);
+    
+    if (schedules.length > 0) {
+      console.log('📋 [GET /schedules] Sample schedule:', JSON.stringify(schedules[0], null, 2));
+    }
     
     // Filter by role
     if (user.role === 'instructor') {
-      const instructorSchedules = schedules.filter(s => s.course?.instructor_id === user.id);
+      console.log('👨‍🏫 [GET /schedules] Filtering for instructor...');
+      const instructorSchedules = schedules.filter(s => {
+        const matches = s.course?.instructor_id === user.id;
+        if (!matches && s.course) {
+          console.log(`⏭️ [GET /schedules] Skipping schedule for course ${s.course.course_code} (instructor: ${s.course.instructor_id})`);
+        }
+        return matches;
+      });
+      console.log('👨‍🏫 [GET /schedules] Instructor schedules found:', instructorSchedules.length);
+      if (instructorSchedules.length > 0) {
+        console.log('✅ [GET /schedules] Sample instructor schedule:', JSON.stringify(instructorSchedules[0], null, 2));
+      }
       return c.json({ schedules: instructorSchedules });
     }
     
     if (user.role === 'student') {
+      console.log('🎓 [GET /schedules] Filtering for student...');
       const enrollments = await db.getEnrollmentsByStudent(user.id);
+      console.log('📚 [GET /schedules] Student enrollments:', enrollments.length);
+      
+      if (enrollments.length > 0) {
+        console.log('📝 [GET /schedules] Sample enrollment:', JSON.stringify(enrollments[0], null, 2));
+      }
+      
       const enrolledCourseIds = enrollments.map(e => e.course_id);
-      const studentSchedules = schedules.filter(s => enrolledCourseIds.includes(s.course_id));
+      console.log('📝 [GET /schedules] Enrolled course IDs:', enrolledCourseIds);
+      
+      const studentSchedules = schedules.filter(s => {
+        const isEnrolled = enrolledCourseIds.includes(s.course_id);
+        if (!isEnrolled) {
+          console.log(`⏭️ [GET /schedules] Skipping schedule for course ${s.course_id} (not enrolled)`);
+        }
+        return isEnrolled;
+      });
+      
+      console.log('🎓 [GET /schedules] Student schedules found:', studentSchedules.length);
+      
+      if (studentSchedules.length > 0) {
+        console.log('✅ [GET /schedules] Student schedules:', JSON.stringify(studentSchedules, null, 2));
+      } else {
+        console.log('⚠️ [GET /schedules] No schedules found for student. Enrollments:', enrolledCourseIds, 'Available courses in schedules:', schedules.map(s => s.course_id));
+      }
+      
       return c.json({ schedules: studentSchedules });
     }
     
+    console.log('👑 [GET /schedules] Admin/Supervisor - returning all', schedules.length, 'schedules');
     return c.json({ schedules });
-  } catch (error) {
-    console.log('Get schedules error:', error);
+  } catch (error: any) {
+    console.error('❌ [GET /schedules] Error:', error);
     return c.json({ error: 'Internal server error while fetching schedules' }, 500);
   }
 });

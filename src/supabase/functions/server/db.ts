@@ -34,7 +34,7 @@ export async function getUserByAuthId(authId: string) {
     .from('users')
     .select('*')
     .eq('auth_id', authId)
-    .single();
+    .maybeSingle(); // Use maybeSingle() instead of single() to avoid error on 0 rows
   
   if (error) {
     console.error('Error getting user by auth_id:', error);
@@ -322,7 +322,7 @@ export async function getEnrollmentsByStudent(studentId: string) {
   const supabase = getSupabaseClient();
   const { data, error } = await supabase
     .from('enrollments')
-    .select('*, course:courses(*)')
+    .select('*, course:courses!enrollments_course_id_fkey(*)')
     .eq('student_id', studentId)
     .order('enrolled_at', { ascending: false });
   
@@ -430,7 +430,7 @@ export async function getAllActiveLiveSessions() {
   const supabase = getSupabaseClient();
   const { data, error } = await supabase
     .from('sessions')
-    .select('*, course:courses(*)')
+    .select('*, course:courses!sessions_course_id_fkey(*)')
     .eq('is_active', true)
     .eq('session_type', 'live')
     .gt('end_time', new Date().toISOString())
@@ -528,18 +528,37 @@ export async function createAttendanceRecord(attendanceData: {
 
 export async function getAttendanceByStudent(studentId: string) {
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from('attendance_records')
-    .select('*, course:courses(*), session:sessions(*)')
-    .eq('student_id', studentId)
-    .order('check_in_time', { ascending: false });
   
-  if (error) {
-    console.error('Error getting attendance by student:', error);
-    return [];
+  // Try with explicit foreign key relationships to avoid ambiguity errors
+  try {
+    const { data, error } = await supabase
+      .from('attendance_records')
+      .select('*, course:courses!attendance_records_course_id_fkey(*), session:sessions!attendance_records_session_id_fkey(*)')
+      .eq('student_id', studentId)
+      .order('check_in_time', { ascending: false });
+    
+    if (error) {
+      console.error('Error getting attendance by student:', error);
+      return [];
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error getting attendance by student (fallback):', error);
+    // Fallback without joins if relationships fail
+    const { data, error: fallbackError } = await supabase
+      .from('attendance_records')
+      .select('*')
+      .eq('student_id', studentId)
+      .order('check_in_time', { ascending: false });
+    
+    if (fallbackError) {
+      console.error('Error getting attendance by student (fallback failed):', fallbackError);
+      return [];
+    }
+    
+    return data;
   }
-  
-  return data;
 }
 
 export async function getAttendanceByCourse(courseId: string) {
@@ -591,18 +610,36 @@ export async function getTodayAttendance() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   
-  const { data, error } = await supabase
-    .from('attendance_records')
-    .select('*, student:users!attendance_records_student_id_fkey(*), course:courses(*)')
-    .gte('check_in_time', today.toISOString())
-    .order('check_in_time', { ascending: false });
-  
-  if (error) {
-    console.error('Error getting today attendance:', error);
-    return [];
+  // Try with explicit foreign key relationships to avoid ambiguity errors
+  try {
+    const { data, error } = await supabase
+      .from('attendance_records')
+      .select('*, student:users!attendance_records_student_id_fkey(*), course:courses!attendance_records_course_id_fkey(*)')
+      .gte('check_in_time', today.toISOString())
+      .order('check_in_time', { ascending: false });
+    
+    if (error) {
+      console.error('Error getting today attendance:', error);
+      return [];
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error getting today attendance (fallback):', error);
+    // Fallback without joins if relationships fail
+    const { data, error: fallbackError } = await supabase
+      .from('attendance_records')
+      .select('*')
+      .gte('check_in_time', today.toISOString())
+      .order('check_in_time', { ascending: false });
+    
+    if (fallbackError) {
+      console.error('Error getting today attendance (fallback failed):', fallbackError);
+      return [];
+    }
+    
+    return data;
   }
-  
-  return data;
 }
 
 // =============================================================================
@@ -792,17 +829,41 @@ export async function createSchedule(scheduleData: {
 
 export async function getAllSchedules() {
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from('schedules')
-    .select('*, course:courses(*)')
-    .order('day_of_week', { ascending: true });
   
-  if (error) {
-    console.error('Error getting all schedules:', error);
-    return [];
+  console.log('📅 [getAllSchedules] Fetching all schedules with course details...');
+  
+  // Try with explicit foreign key relationship
+  try {
+    const { data, error } = await supabase
+      .from('schedules')
+      .select('*, course:courses!schedules_course_id_fkey(*)')
+      .order('day_of_week', { ascending: true });
+    
+    if (error) {
+      console.error('❌ [getAllSchedules] Error with explicit FK:', error);
+      throw error;
+    }
+    
+    console.log('✅ [getAllSchedules] Loaded', data?.length || 0, 'schedules');
+    return data || [];
+  } catch (error) {
+    console.error('❌ [getAllSchedules] Fatal error:', error);
+    
+    // Fallback: try without join
+    console.log('⚠️ [getAllSchedules] Trying fallback without course details...');
+    const { data, error: fallbackError } = await supabase
+      .from('schedules')
+      .select('*')
+      .order('day_of_week', { ascending: true });
+    
+    if (fallbackError) {
+      console.error('❌ [getAllSchedules] Fallback failed:', fallbackError);
+      return [];
+    }
+    
+    console.log('✅ [getAllSchedules] Fallback loaded', data?.length || 0, 'schedules (without course details)');
+    return data || [];
   }
-  
-  return data;
 }
 
 export async function getSchedulesByCourse(courseId: string) {

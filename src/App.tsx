@@ -22,6 +22,7 @@ const SupervisorDashboard = lazy(() => import('./components/SupervisorDashboard'
 const UserManagement = lazy(() => import('./components/UserManagement').then(m => ({ default: m.UserManagement })));
 const CourseManagement = lazy(() => import('./components/CourseManagement').then(m => ({ default: m.CourseManagement })));
 const ScheduleManagement = lazy(() => import('./components/ScheduleManagement').then(m => ({ default: m.ScheduleManagement })));
+const StudentScheduleView = lazy(() => import('./components/StudentScheduleView').then(m => ({ default: m.StudentScheduleView })));
 const SessionManagement = lazy(() => import('./components/SessionManagement').then(m => ({ default: m.SessionManagement })));
 const StudentAttendance = lazy(() => import('./components/StudentAttendance').then(m => ({ default: m.StudentAttendance })));
 const MyAttendanceRecords = lazy(() => import('./components/MyAttendanceRecords').then(m => ({ default: m.MyAttendanceRecords })));
@@ -258,7 +259,7 @@ function AppContent() {
             return (
               <ErrorBoundary>
                 <Suspense fallback={<LoadingFallback />}>
-                  <ScheduleManagement />
+                  <StudentScheduleView />
                 </Suspense>
               </ErrorBoundary>
             );

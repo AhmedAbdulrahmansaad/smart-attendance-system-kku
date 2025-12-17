@@ -16,6 +16,7 @@ import { Calendar, Plus, Trash2, AlertCircle, Clock } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { toast } from 'sonner';
 import { projectId, publicAnonKey } from '../utils/supabase/info';
+import { getSupabaseClient } from '../utils/supabaseClient';
 
 interface Schedule {
   id: string;
@@ -70,30 +71,57 @@ export function ScheduleManagement() {
   }, [token]);
 
   const loadSchedules = async () => {
-    if (!token) return;
+    if (!token) {
+      console.log('⚠️ [ScheduleManagement] No token available');
+      return;
+    }
     
     try {
       console.log('📅 [ScheduleManagement] Loading schedules from backend...');
+      console.log('🔑 [ScheduleManagement] Token:', token ? token.substring(0, 20) + '...' : 'MISSING');
       
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/schedules`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+      // Try backend first
+      try {
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/schedules`,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (response.ok) {
+          const { schedules: schedulesData } = await response.json();
+          console.log('✅ [ScheduleManagement] Loaded', schedulesData?.length || 0, 'schedules from backend');
+          setSchedules(schedulesData || []);
+          return;
         }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to load schedules');
+        
+        console.log('⚠️ [ScheduleManagement] Backend not available, using direct Supabase...');
+      } catch (backendError) {
+        console.log('⚠️ [ScheduleManagement] Backend error, using direct Supabase...', backendError);
       }
-
-      const { schedules: schedulesData } = await response.json();
-
-      console.log('✅ [ScheduleManagement] Loaded', schedulesData?.length || 0, 'schedules');
+      
+      // Fallback: Direct Supabase query
+      console.log('🔄 [ScheduleManagement] Using direct Supabase...');
+      const supabase = getSupabaseClient(token);
+      
+      const { data: schedulesData, error: supabaseError } = await supabase
+        .from('schedules')
+        .select('*, course:courses!schedules_course_id_fkey(*)')
+        .order('day_of_week', { ascending: true });
+      
+      if (supabaseError) {
+        console.error('❌ [ScheduleManagement] Supabase error:', supabaseError);
+        throw new Error(supabaseError.message);
+      }
+      
+      console.log('✅ [ScheduleManagement] Loaded', schedulesData?.length || 0, 'schedules from Supabase');
+      console.log('📋 [ScheduleManagement] Schedules:', schedulesData);
       setSchedules(schedulesData || []);
+
     } catch (error: any) {
       console.error('❌ [ScheduleManagement] Error loading schedules:', error);
       toast.error('فشل تحميل الجداول / Failed to load schedules');
@@ -104,29 +132,54 @@ export function ScheduleManagement() {
   };
 
   const loadCourses = async () => {
-    if (!token) return;
+    if (!token) {
+      console.log('⚠️ [ScheduleManagement] No token available for courses');
+      return;
+    }
     
     try {
       console.log('📚 [ScheduleManagement] Loading courses from backend...');
+      console.log('🔑 [ScheduleManagement] Token:', token ? token.substring(0, 20) + '...' : 'MISSING');
       
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/courses`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+      // Try backend first
+      try {
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/courses`,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (response.ok) {
+          const { courses: coursesData } = await response.json();
+          console.log('✅ [ScheduleManagement] Loaded', coursesData?.length || 0, 'courses from backend');
+          setCourses(coursesData || []);
+          return;
         }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to load courses');
+        
+        console.log('⚠️ [ScheduleManagement] Backend not available for courses, using direct Supabase...');
+      } catch (backendError) {
+        console.log('⚠️ [ScheduleManagement] Backend error for courses, using direct Supabase...', backendError);
       }
-
-      const { courses: coursesData } = await response.json();
-
-      console.log('✅ [ScheduleManagement] Loaded', coursesData?.length || 0, 'courses');
+      
+      // Fallback: Direct Supabase
+      console.log('🔄 [ScheduleManagement] Using direct Supabase for courses...');
+      const supabase = getSupabaseClient(token);
+      
+      const { data: coursesData, error: coursesError } = await supabase
+        .from('courses')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (coursesError) {
+        console.error('❌ [ScheduleManagement] Courses error:', coursesError);
+        throw new Error(coursesError.message);
+      }
+      
+      console.log('✅ [ScheduleManagement] Loaded', coursesData?.length || 0, 'courses from Supabase');
       setCourses(coursesData || []);
     } catch (error: any) {
       console.error('❌ [ScheduleManagement] Error loading courses:', error);
@@ -144,32 +197,70 @@ export function ScheduleManagement() {
     }
 
     try {
-      console.log('➕ [ScheduleManagement] Adding new schedule via backend...');
+      console.log('➕ [ScheduleManagement] Adding new schedule...');
       
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/schedules`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            course_id: newScheduleCourse,
-            day_of_week: newScheduleDay,
-            start_time: newScheduleStartTime,
-            end_time: newScheduleEndTime,
-            location: newScheduleLocation || null,
-          }),
+      // Try backend first
+      try {
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/schedules`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              course_id: newScheduleCourse,
+              day_of_week: newScheduleDay,
+              start_time: newScheduleStartTime,
+              end_time: newScheduleEndTime,
+              location: newScheduleLocation || null,
+            }),
+          }
+        );
+
+        if (response.ok) {
+          console.log('✅ [ScheduleManagement] Schedule added successfully via backend');
+          toast.success('تم إضافة الجدول بنجاح / Schedule added successfully');
+
+          setIsDialogOpen(false);
+          setNewScheduleCourse('');
+          setNewScheduleDay('');
+          setNewScheduleStartTime('');
+          setNewScheduleEndTime('');
+          setNewScheduleLocation('');
+          
+          await loadSchedules();
+          return;
         }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to add schedule');
+        
+        console.log('⚠️ [ScheduleManagement] Backend not available for adding, using direct Supabase...');
+      } catch (backendError) {
+        console.log('⚠️ [ScheduleManagement] Backend error, using direct Supabase...', backendError);
       }
-
-      console.log('✅ [ScheduleManagement] Schedule added successfully');
+      
+      // Fallback: Direct Supabase insert
+      console.log('🔄 [ScheduleManagement] Using direct Supabase to add schedule...');
+      const supabase = getSupabaseClient(token);
+      
+      const { data, error: insertError } = await supabase
+        .from('schedules')
+        .insert({
+          course_id: newScheduleCourse,
+          day_of_week: newScheduleDay,
+          start_time: newScheduleStartTime,
+          end_time: newScheduleEndTime,
+          location: newScheduleLocation || null,
+        })
+        .select()
+        .single();
+      
+      if (insertError) {
+        console.error('❌ [ScheduleManagement] Insert error:', insertError);
+        throw new Error(insertError.message);
+      }
+      
+      console.log('✅ [ScheduleManagement] Schedule added successfully via Supabase:', data.id);
       toast.success('تم إضافة الجدول بنجاح / Schedule added successfully');
 
       setIsDialogOpen(false);
