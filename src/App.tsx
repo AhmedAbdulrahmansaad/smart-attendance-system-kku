@@ -28,6 +28,7 @@ const StudentAttendance = lazy(() => import('./components/StudentAttendance').th
 const MyAttendanceRecords = lazy(() => import('./components/MyAttendanceRecords').then(m => ({ default: m.MyAttendanceRecords })));
 const ReportsPage = lazy(() => import('./components/ReportsPage').then(m => ({ default: m.ReportsPage })));
 const TeamPage = lazy(() => import('./components/TeamPage').then(m => ({ default: m.TeamPage })));
+const RLSFixVerification = lazy(() => import('./components/RLSFixVerification').then(m => ({ default: m.RLSFixVerification })));
 const BackendHealthCheck = lazy(() => import('./components/BackendHealthCheck').then(m => ({ default: m.BackendHealthCheck })));
 const SupabaseSetupGuide = lazy(() => import('./components/SupabaseSetupGuide').then(m => ({ default: m.SupabaseSetupGuide })));
 const DatabaseConnectionTest = lazy(() => import('./components/DatabaseConnectionTest').then(m => ({ default: m.DatabaseConnectionTest })));
@@ -135,7 +136,7 @@ function AppContent() {
             return (
               <ErrorBoundary>
                 <Suspense fallback={<LoadingFallback />}>
-                  <AdminDashboard />
+                  <AdminDashboard onNavigate={setCurrentPage} />
                 </Suspense>
               </ErrorBoundary>
             );
@@ -168,6 +169,14 @@ function AppContent() {
               <ErrorBoundary>
                 <Suspense fallback={<LoadingFallback />}>
                   <ReportsPage />
+                </Suspense>
+              </ErrorBoundary>
+            );
+          case 'rls-verification':
+            return (
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingFallback />}>
+                  <RLSFixVerification />
                 </Suspense>
               </ErrorBoundary>
             );

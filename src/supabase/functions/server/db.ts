@@ -735,96 +735,96 @@ export async function createSchedule(scheduleData: {
 }) {
   console.log('📝 [createSchedule] Creating schedule with data:', scheduleData);
   
-  try {
-    // Try different day formats to match the constraint
-    let dayValue = scheduleData.day_of_week;
-    
-    // Map of different possible formats - try most common first
-    const dayMappings: Record<string, string[]> = {
-      'SUNDAY': ['Sunday', 'SUNDAY', 'sunday', '0', 'الأحد'],
-      'MONDAY': ['Monday', 'MONDAY', 'monday', '1', 'الاثنين'],
-      'TUESDAY': ['Tuesday', 'TUESDAY', 'tuesday', '2', 'الثلاثاء'],
-      'WEDNESDAY': ['Wednesday', 'WEDNESDAY', 'wednesday', '3', 'الأربعاء'],
-      'THURSDAY': ['Thursday', 'THURSDAY', 'thursday', '4', 'الخميس'],
-      'FRIDAY': ['Friday', 'FRIDAY', 'friday', '5', 'الجمعة'],
-      'SATURDAY': ['Saturday', 'SATURDAY', 'saturday', '6', 'السبت'],
-    };
-    
-    // Find the variants to try
-    const variants = dayMappings[dayValue.toUpperCase()] || [dayValue];
-    
-    console.log(`🔍 [createSchedule] Will try ${variants.length} variants:`, variants);
-    
-    let lastError = null;
-    
-    // Try each variant until one works
-    for (let i = 0; i < variants.length; i++) {
-      const variant = variants[i];
-      try {
-        console.log(`🔄 [createSchedule] Attempt ${i + 1}/${variants.length}: trying day_of_week="${variant}"`);
-        
-        const response = await fetch(
-          `${Deno.env.get('SUPABASE_URL')}/rest/v1/schedules`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-              'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
-              'Prefer': 'return=representation',
-            },
-            body: JSON.stringify({
-              course_id: scheduleData.course_id,
-              day_of_week: variant,
-              start_time: scheduleData.start_time,
-              end_time: scheduleData.end_time,
-              location: scheduleData.location || null,
-              building: scheduleData.building || null,
-              room_number: scheduleData.room_number || null,
-            }),
-          }
-        );
-        
-        if (response.ok) {
-          const data = await response.json();
-          const schedule = Array.isArray(data) ? data[0] : data;
-          console.log(`✅ [createSchedule] SUCCESS! Schedule created with day_of_week="${variant}"`);
-          console.log(`✅ [createSchedule] Schedule:`, schedule);
-          return schedule;
+  // Use direct HTTP request to bypass RLS issues (same as createEnrollment)
+  // SERVICE_ROLE_KEY bypasses RLS completely
+  
+  // Try different day formats to match the constraint
+  let dayValue = scheduleData.day_of_week;
+  
+  // Map of different possible formats - try most common first
+  const dayMappings: Record<string, string[]> = {
+    'SUNDAY': ['Sunday', 'SUNDAY', 'sunday', '0', 'الأحد'],
+    'MONDAY': ['Monday', 'MONDAY', 'monday', '1', 'الاثنين'],
+    'TUESDAY': ['Tuesday', 'TUESDAY', 'tuesday', '2', 'الثلاثاء'],
+    'WEDNESDAY': ['Wednesday', 'WEDNESDAY', 'wednesday', '3', 'الأربعاء'],
+    'THURSDAY': ['Thursday', 'THURSDAY', 'thursday', '4', 'الخميس'],
+    'FRIDAY': ['Friday', 'FRIDAY', 'friday', '5', 'الجمعة'],
+    'SATURDAY': ['Saturday', 'SATURDAY', 'saturday', '6', 'السبت'],
+  };
+  
+  // Find the variants to try
+  const variants = dayMappings[dayValue.toUpperCase()] || [dayValue];
+  
+  console.log(`🔍 [createSchedule] Will try ${variants.length} variants:`, variants);
+  
+  let lastError = null;
+  
+  // Try each variant until one works
+  for (let i = 0; i < variants.length; i++) {
+    const variant = variants[i];
+    try {
+      console.log(`🔄 [createSchedule] Attempt ${i + 1}/${variants.length}: trying day_of_week="${variant}"`);
+      
+      // Use direct HTTP request with SERVICE_ROLE_KEY to bypass RLS completely
+      const response = await fetch(
+        `${Deno.env.get('SUPABASE_URL')}/rest/v1/schedules`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({
+            course_id: scheduleData.course_id,
+            day_of_week: variant,
+            start_time: scheduleData.start_time,
+            end_time: scheduleData.end_time,
+            location: scheduleData.location || null,
+            building: scheduleData.building || null,
+            room_number: scheduleData.room_number || null,
+          }),
         }
-        
-        const error = await response.json();
-        lastError = error;
-        
-        // If it's not a constraint error, throw immediately
-        if (!error.message?.includes('check constraint') && !error.message?.includes('day_of_week')) {
-          console.error(`❌ [createSchedule] Non-constraint error with "${variant}":`, error);
-          throw new Error(error.message || 'Failed to create schedule');
-        }
-        
-        console.log(`⚠️ [createSchedule] Variant "${variant}" failed (constraint error), trying next...`);
-      } catch (err: any) {
-        // If error is not about constraint, throw it
-        if (!err.message?.includes('check constraint') && !err.message?.includes('day_of_week') && err.message !== 'Failed to create schedule') {
-          throw err;
-        }
-        lastError = err;
-        continue;
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        const schedule = Array.isArray(data) ? data[0] : data;
+        console.log(`✅ [createSchedule] SUCCESS! Schedule created with day_of_week="${variant}"`);
+        console.log(`✅ [createSchedule] Schedule:`, schedule);
+        return schedule;
       }
+      
+      const errorData = await response.json();
+      lastError = errorData;
+      
+      // If it's not a constraint error, throw immediately
+      if (!errorData.message?.includes('check constraint') && !errorData.message?.includes('day_of_week')) {
+        console.error(`❌ [createSchedule] Non-constraint error with "${variant}":`, errorData);
+        throw new Error(errorData.message || 'Failed to create schedule');
+      }
+      
+      console.log(`⚠️ [createSchedule] Variant "${variant}" failed (constraint error), trying next...`);
+    } catch (err: any) {
+      // If error is not about constraint, throw it
+      if (!err.message?.includes('check constraint') && !err.message?.includes('day_of_week') && err.message !== 'Failed to create schedule') {
+        console.error(`❌ [createSchedule] Fatal error with "${variant}":`, err);
+        throw err;
+      }
+      lastError = err;
+      continue;
     }
-    
-    // If all variants failed, throw the last error with helpful message
-    console.error(`❌ [createSchedule] All ${variants.length} day_of_week variants failed!`);
-    console.error('❌ [createSchedule] Last error:', lastError);
-    throw new Error(
-      `Failed to create schedule. The day_of_week check constraint in database doesn't match any of: ${variants.join(', ')}. ` +
-      `Please check your Supabase database table 'schedules' column 'day_of_week' constraint. ` +
-      `Error: ${JSON.stringify(lastError)}`
-    );
-  } catch (error) {
-    console.error('❌ [createSchedule] Fatal error:', error);
-    throw error;
   }
+  
+  // If all variants failed, throw the last error with helpful message
+  console.error(`❌ [createSchedule] All ${variants.length} day_of_week variants failed!`);
+  console.error('❌ [createSchedule] Last error:', lastError);
+  throw new Error(
+    `Failed to create schedule. The day_of_week check constraint in database doesn't match any of: ${variants.join(', ')}. ` +
+    `Please check your Supabase database table 'schedules' column 'day_of_week' constraint. ` +
+    `Error: ${JSON.stringify(lastError)}`
+  );
 }
 
 export async function getAllSchedules() {

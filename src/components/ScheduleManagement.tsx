@@ -54,13 +54,13 @@ export function ScheduleManagement() {
   const [newScheduleLocation, setNewScheduleLocation] = useState('');
 
   const daysOfWeek = [
-    { value: 'SUNDAY', label: 'الأحد' },
-    { value: 'MONDAY', label: 'الاثنين' },
-    { value: 'TUESDAY', label: 'الثلاثاء' },
-    { value: 'WEDNESDAY', label: 'الأربعاء' },
-    { value: 'THURSDAY', label: 'الخميس' },
-    { value: 'FRIDAY', label: 'الجمعة' },
-    { value: 'SATURDAY', label: 'السبت' },
+    { value: 'Sunday', label: 'الأحد' },
+    { value: 'Monday', label: 'الاثنين' },
+    { value: 'Tuesday', label: 'الثلاثاء' },
+    { value: 'Wednesday', label: 'الأربعاء' },
+    { value: 'Thursday', label: 'الخميس' },
+    { value: 'Friday', label: 'الجمعة' },
+    { value: 'Saturday', label: 'السبت' },
   ];
 
   useEffect(() => {
@@ -198,31 +198,68 @@ export function ScheduleManagement() {
 
     try {
       console.log('➕ [ScheduleManagement] Adding new schedule...');
+      console.log('📦 [ScheduleManagement] Schedule data:', {
+        course_id: newScheduleCourse,
+        day_of_week: newScheduleDay,
+        start_time: newScheduleStartTime,
+        end_time: newScheduleEndTime,
+        location: newScheduleLocation || null,
+      });
       
-      // Try backend first
+      // استخدام Backend (Edge Function) الذي يستخدم SERVICE_ROLE_KEY لتجاوز RLS
+      console.log('🔄 [ScheduleManagement] Using Edge Function with SERVICE_ROLE_KEY...');
+      const url = `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/schedules`;
+      console.log('🌐 [ScheduleManagement] Fetching URL:', url);
+      console.log('🔑 [ScheduleManagement] Token:', token ? token.substring(0, 20) + '...' : 'MISSING');
+      
+      let response;
       try {
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/schedules`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
+        response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            course_id: newScheduleCourse,
+            day_of_week: newScheduleDay,
+            start_time: newScheduleStartTime,
+            end_time: newScheduleEndTime,
+            location: newScheduleLocation || null,
+          }),
+        });
+      } catch (fetchError: any) {
+        console.error('❌ [ScheduleManagement] Network error during fetch:', fetchError);
+        console.error('❌ [ScheduleManagement] This usually means:');
+        console.error('   1. Edge Function is not deployed or not running');
+        console.error('   2. CORS issue');
+        console.error('   3. Network connectivity issue');
+        console.error('   4. URL is incorrect');
+        console.error('❌ [ScheduleManagement] Trying direct Supabase insert as fallback...');
+        
+        // Fallback: Try direct Supabase insert
+        try {
+          const supabase = getSupabaseClient(token);
+          const { data, error: supabaseError } = await supabase
+            .from('schedules')
+            .insert([{
               course_id: newScheduleCourse,
               day_of_week: newScheduleDay,
               start_time: newScheduleStartTime,
               end_time: newScheduleEndTime,
               location: newScheduleLocation || null,
-            }),
+            }])
+            .select()
+            .single();
+          
+          if (supabaseError) {
+            console.error('❌ [ScheduleManagement] Supabase fallback also failed:', supabaseError);
+            throw new Error(supabaseError.message);
           }
-        );
-
-        if (response.ok) {
-          console.log('✅ [ScheduleManagement] Schedule added successfully via backend');
+          
+          console.log('✅ [ScheduleManagement] Schedule added via Supabase fallback!');
           toast.success('تم إضافة الجدول بنجاح / Schedule added successfully');
-
+          
           setIsDialogOpen(false);
           setNewScheduleCourse('');
           setNewScheduleDay('');
@@ -232,35 +269,27 @@ export function ScheduleManagement() {
           
           await loadSchedules();
           return;
+        } catch (fallbackError: any) {
+          console.error('❌ [ScheduleManagement] Fallback also failed:', fallbackError);
+          throw new Error('Failed to add schedule. Please check database RLS settings.');
         }
-        
-        console.log('⚠️ [ScheduleManagement] Backend not available for adding, using direct Supabase...');
-      } catch (backendError) {
-        console.log('⚠️ [ScheduleManagement] Backend error, using direct Supabase...', backendError);
       }
+
+      console.log('📡 [ScheduleManagement] Response status:', response.status);
       
-      // Fallback: Direct Supabase insert
-      console.log('🔄 [ScheduleManagement] Using direct Supabase to add schedule...');
-      const supabase = getSupabaseClient(token);
-      
-      const { data, error: insertError } = await supabase
-        .from('schedules')
-        .insert({
-          course_id: newScheduleCourse,
-          day_of_week: newScheduleDay,
-          start_time: newScheduleStartTime,
-          end_time: newScheduleEndTime,
-          location: newScheduleLocation || null,
-        })
-        .select()
-        .single();
-      
-      if (insertError) {
-        console.error('❌ [ScheduleManagement] Insert error:', insertError);
-        throw new Error(insertError.message);
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+        }
+        console.error('❌ [ScheduleManagement] Backend error:', errorData);
+        throw new Error(errorData.error || 'فشل إضافة الجدول');
       }
-      
-      console.log('✅ [ScheduleManagement] Schedule added successfully via Supabase:', data.id);
+
+      const result = await response.json();
+      console.log('✅ [ScheduleManagement] Schedule added successfully:', result);
       toast.success('تم إضافة الجدول بنجاح / Schedule added successfully');
 
       setIsDialogOpen(false);
@@ -273,8 +302,30 @@ export function ScheduleManagement() {
       await loadSchedules();
     } catch (err: any) {
       console.error('❌ [ScheduleManagement] Error adding schedule:', err);
-      toast.error('فشل إضافة الجدول / Failed to add schedule');
-      setError(err.message || 'فشل إضافة الجدول');
+      console.error('❌ [ScheduleManagement] Error details:', {
+        message: err.message,
+        stack: err.stack,
+        name: err.name,
+        code: err.code,
+        details: err.details,
+        hint: err.hint
+      });
+      
+      // تحسين رسالة الخطأ
+      let errorMessage = 'فشل إضافة الجدول / Failed to add schedule';
+      
+      if (err.message?.includes('infinite recursion')) {
+        errorMessage = 'خطأ في إعدادات الأمان. الرجاء تشغيل SQL: ALTER TABLE users DISABLE ROW LEVEL SECURITY; / RLS error';
+      } else if (err.message?.includes('Failed to fetch')) {
+        errorMessage = 'فشل الاتصال بالخادم. تحقق من deployment Edge Function / Edge Function not available';
+      } else if (err.message?.includes('RLS')) {
+        errorMessage = 'خطأ أمان قاعدة البيانات. الرجاء تعطيل RLS / Database RLS error';
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      toast.error(errorMessage);
+      setError(errorMessage);
     }
   };
 
@@ -286,28 +337,52 @@ export function ScheduleManagement() {
     }
 
     try {
-      console.log('🗑️ [ScheduleManagement] Deleting schedule via backend...');
+      console.log('🗑️ [ScheduleManagement] Deleting schedule:', scheduleId);
       
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-90ad488b/schedules/${scheduleId}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+      // Try backend first
+      try {
+        console.log('🌐 [ScheduleManagement] Trying Edge Function delete...');
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/server/make-server-90ad488b/schedules/${scheduleId}`,
+          {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (response.ok) {
+          console.log('✅ [ScheduleManagement] Schedule deleted successfully via backend');
+          toast.success('تم حذف الجدول بنجاح / Schedule deleted successfully');
+          await loadSchedules();
+          return;
         }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to delete schedule');
+        
+        console.log('⚠️ [ScheduleManagement] Backend delete failed, trying direct Supabase...');
+      } catch (backendError) {
+        console.log('⚠️ [ScheduleManagement] Backend delete error, trying direct Supabase...', backendError);
       }
-
-      console.log('✅ [ScheduleManagement] Schedule deleted successfully');
+      
+      // Fallback: Direct Supabase delete
+      console.log('🔄 [ScheduleManagement] Using direct Supabase delete...');
+      const supabase = getSupabaseClient(token);
+      
+      const { error: deleteError } = await supabase
+        .from('schedules')
+        .delete()
+        .eq('id', scheduleId);
+      
+      if (deleteError) {
+        console.error('❌ [ScheduleManagement] Direct Supabase delete failed:', deleteError);
+        throw new Error(deleteError.message || 'Failed to delete schedule');
+      }
+      
+      console.log('✅ [ScheduleManagement] Schedule deleted successfully via direct Supabase');
       toast.success('تم حذف الجدول بنجاح / Schedule deleted successfully');
-
       await loadSchedules();
+      
     } catch (error: any) {
       console.error('❌ [ScheduleManagement] Error deleting schedule:', error);
       toast.error('فشل حذف الجدول / Failed to delete schedule');
@@ -353,22 +428,24 @@ export function ScheduleManagement() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1>الجداول الدراسية</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+            {currentUser?.role === 'ar' ? 'الجداول الدراسية' : 'Class Schedules'}
+          </h1>
+          <p className="text-muted-foreground mt-1">
             {currentUser?.role === 'student' 
               ? 'جدولك الأسبوعي' 
-              : 'إدارة الجداول الدراسية'}
+              : 'إدارة الجداول الدراسية لجميع المقررات'}
           </p>
         </div>
 
         {(currentUser?.role === 'admin' || currentUser?.role === 'instructor') && (
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button>
-                <Plus className="w-4 h-4 ml-2" />
-                إضافة جدول
+              <Button className="gap-2">
+                <Plus className="w-4 h-4" />
+                إضافة جدول دراسي
               </Button>
             </DialogTrigger>
             <DialogContent>

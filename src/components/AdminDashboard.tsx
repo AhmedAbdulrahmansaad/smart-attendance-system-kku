@@ -22,7 +22,11 @@ import {
   AlertCircle
 } from 'lucide-react';
 
-export function AdminDashboard() {
+interface AdminDashboardProps {
+  onNavigate?: (page: string) => void;
+}
+
+export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const { language } = useLanguage();
   const { token } = useAuth();
   
@@ -221,15 +225,21 @@ export function AdminDashboard() {
             </CardHeader>
             <CardContent className="space-y-3">
               {[
-                { label: language === 'ar' ? 'إدارة المستخدمين' : 'Manage Users', icon: Users, color: 'text-blue-600' },
-                { label: language === 'ar' ? 'إدارة المواد' : 'Manage Courses', icon: BookOpen, color: 'text-green-600' },
-                { label: language === 'ar' ? 'إدارة الجداول' : 'Manage Schedules', icon: Calendar, color: 'text-purple-600' },
-                { label: language === 'ar' ? 'التقارير والإحصائيات' : 'Reports & Analytics', icon: PieChart, color: 'text-orange-600' },
+                { label: language === 'ar' ? 'إدارة المستخدمين' : 'Manage Users', icon: Users, color: 'text-blue-600', action: 'users' },
+                { label: language === 'ar' ? 'إدارة المواد' : 'Manage Courses', icon: BookOpen, color: 'text-green-600', action: 'courses' },
+                { label: language === 'ar' ? 'إدارة الجداول' : 'Manage Schedules', icon: Calendar, color: 'text-purple-600', action: 'schedules' },
+                { label: language === 'ar' ? 'التقارير والإحصائيات' : 'Reports & Analytics', icon: PieChart, color: 'text-orange-600', action: 'reports' },
               ].map((action, index) => (
                 <Button
                   key={index}
                   variant="outline"
                   className="w-full justify-between h-14 text-base hover:bg-primary/5 hover:border-primary"
+                  onClick={() => {
+                    // Note: You'd need to pass an onNavigate prop from parent to make this work
+                    if (onNavigate) {
+                      onNavigate(action.action);
+                    }
+                  }}
                 >
                   <div className="flex items-center gap-3">
                     <action.icon className={`w-5 h-5 ${action.color}`} />

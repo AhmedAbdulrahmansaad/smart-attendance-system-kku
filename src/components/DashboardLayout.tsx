@@ -44,6 +44,7 @@ export function DashboardLayout({ children, currentPage, onNavigate }: Dashboard
       { id: 'schedules', label: t('schedules'), icon: Calendar },
       { id: 'reports', label: t('reports'), icon: FileText },
       { id: 'team', label: t('team'), icon: UsersIcon },
+      { id: 'rls-verification', label: language === 'ar' ? 'التحقق من RLS' : 'RLS Verification', icon: ClipboardCheck },
     ],
     instructor: [
       { id: 'dashboard', label: t('dashboard'), icon: LayoutDashboard },
